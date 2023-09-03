@@ -1,11 +1,14 @@
-use crate::messages::*;
+use crate::peer::*;
 use crate::raft_state::*;
-use crate::utils::*;
+use crate::rpc::*;
+
+use std::sync::Arc;
 
 pub struct ServerContext {
     db: Box<std::fs::File>,
     state: RaftState,
-    // peers: Vec<Peer>,
+    rpc_client: Arc<RpcClient>,
+    peers: PeerMap,
 }
 
 impl ServerContext {

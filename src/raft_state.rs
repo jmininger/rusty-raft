@@ -1,5 +1,5 @@
 use crate::log::*;
-use crate::messages::*;
+use crate::rpc::*;
 use crate::utils::*;
 use std::collections::HashMap;
 
@@ -12,37 +12,47 @@ pub struct RaftState {
     commit_index: LogIndex,
     last_applied: LogIndex,
     leader_state: Option<LeaderState>,
-    current_state: ServerType,
+    node_type: ServerType,
     current_term: TermId,
     log: Log,
 }
 
 impl RaftState {
-    fn new() -> Self {
-        RaftState {
+    pub fn new(is_leader: bool) -> Self {
+        let (node_type, leader_state) = match is_leader {
+            false => (ServerType::Follower, None),
+            true => (
+                ServerType::Leader,
+                Some(LeaderState {
+                    next_index: HashMap::new(),
+                    match_index: HashMap::new(),
+                }),
+            ),
+        };
+        Self {
             commit_index: 0,
             last_applied: 0,
-            leader_state: None,
-            current_state: ServerType::Follower,
+            leader_state,
+            node_type,
             current_term: 0,
             log: Log::new(),
         }
     }
 
-    fn is_leader(&self) -> bool {
-        self.current_state == ServerType::Leader
+    pub fn is_leader(&self) -> bool {
+        self.node_type == ServerType::Leader
     }
 
-    fn commit_entry(&mut self, entry: LogEntry) {
+    pub fn commit_entry(&mut self, entry: LogEntry) {
         // Also commits all prior entries in the log;
         todo!();
     }
 
-    fn init_election(&self) {
+    pub fn init_election(&self) {
         todo!();
     }
 
-    fn handle_append(&mut self, message: AppendEntry) {
+    pub fn handle_append(&mut self, message: AppendEntry) {
         if !self.is_leader() {
             // Need to potentially remove ourselves as a leader
             todo!()
