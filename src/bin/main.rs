@@ -1,19 +1,13 @@
-mod context;
-mod log;
-mod network;
-mod peer;
-mod raft_state;
-mod rpc;
-mod utils;
-
 use clap::{Arg, Command};
 
-use eyre::Error;
+use color_eyre::Result;
+use rpc::run_rpc_server;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use peer::*;
 use raft_state::RaftState;
-use rpc::run_rpc_server;
+use rusty_raft::*;
 // use tokio;
 
 #[tokio::main]
@@ -22,8 +16,13 @@ async fn main() {
     let peer_map = read_peer_cfg().unwrap();
     let raft_state = RaftState::new(is_leader);
     let rpc_client = rpc::RpcClient::new(peer_map);
+    let app_state = context::RaftProtocol {
+        state: raft_state,
+        rpc_client: Arc::new(rpc_client),
+        // peers: PeerMap::new(HashMap::new()),
+    };
 
-    run_rpc_server(port).await;
+    run_rpc_server(app_state, port).await;
     // pub struct RaftProtocol {
     //     db: Box<std::fs::File>,
     //     state: RaftState,
@@ -57,6 +56,10 @@ fn parse_cli() -> (u16, bool) {
     (port.clone(), is_leader)
 }
 
+fn read_peer_cfg() -> Result<PeerMap> {
+    Ok(PeerMap::new(HashMap::new()))
+}
+
 // fn read_peer_map() -> PeerMap {}
 
 // struct Peer {
@@ -65,7 +68,3 @@ fn parse_cli() -> (u16, bool) {
 // }
 
 // impl Peer {}
-
-fn read_peer_cfg() -> Result<PeerMap, Error> {
-    Ok(PeerMap::new(HashMap::new()))
-}

@@ -1,11 +1,13 @@
 use crate::utils::*;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone)]
 pub struct Peer {
     id: NodeId,
     addr: String,
 }
 
+#[derive(Debug, Clone)]
 pub struct PeerMap(HashMap<NodeId, Peer>);
 
 impl PeerMap {
