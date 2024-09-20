@@ -1,5 +1,6 @@
-use crate::utils::*;
 use std::collections::HashMap;
+
+use crate::utils::*;
 
 #[derive(Debug, Clone)]
 pub struct Peer {
@@ -14,6 +15,7 @@ impl PeerMap {
     pub fn new(hm: HashMap<NodeId, Peer>) -> Self {
         Self(hm)
     }
+
     pub fn fetch_address(&self, id: NodeId) -> &str {
         //TODO handle error
         self.0.get(&id).map(|peer| &peer.addr).unwrap()

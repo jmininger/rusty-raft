@@ -1,12 +1,16 @@
-use clap::{Arg, Command};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+};
 
+use clap::{
+    Arg,
+    Command,
+};
 use color_eyre::Result;
-use rpc::run_rpc_server;
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use peer::*;
 use raft_state::RaftState;
+use rpc::run_rpc_server;
 use rusty_raft::*;
 // use tokio;
 

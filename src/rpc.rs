@@ -1,15 +1,23 @@
-use crate::context;
-use crate::peer::*;
-use crate::utils::*;
-
 use axum::{
-    extract::{Json, State},
+    extract::{
+        Json,
+        State,
+    },
     response::IntoResponse,
     routing::post,
     Router,
 };
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize,
+    Serialize,
+};
+
+use crate::{
+    context,
+    peer::*,
+    utils::*,
+};
 
 // Alias makes it easy to swap things out for now
 type AppState = context::RaftProtocol;

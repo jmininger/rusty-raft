@@ -1,8 +1,9 @@
-use crate::peer::*;
-use crate::raft_state::*;
-use crate::rpc::*;
-
 use std::sync::Arc;
+
+use crate::{
+    raft_state::*,
+    rpc::*,
+};
 
 pub trait Persist {}
 

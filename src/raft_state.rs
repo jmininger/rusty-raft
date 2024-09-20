@@ -1,7 +1,10 @@
-use crate::log::*;
-use crate::rpc::*;
-use crate::utils::*;
 use std::collections::HashMap;
+
+use crate::{
+    log::*,
+    rpc::*,
+    utils::*,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LeaderState {
