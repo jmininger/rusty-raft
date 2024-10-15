@@ -1,12 +1,5 @@
-use color_eyre::Result;
 use rand::Rng;
 use tokio::{
-    net::{
-        unix::SocketAddr,
-        TcpListener,
-        TcpSocket,
-        ToSocketAddrs,
-    },
     select,
     sync::{
         mpsc,
@@ -14,21 +7,6 @@ use tokio::{
     },
 };
 use tracing::warn;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    Ok(())
-}
-
-async fn start_network(addr: impl ToSocketAddrs) -> Result<()> {
-    let listener = TcpListener::bind(addr).await?;
-
-    while let Ok((sock, addr)) = listener.accept().await {
-        todo!()
-    }
-
-    todo!()
-}
 
 async fn election_timeout(
     mut msg_alert: mpsc::Receiver<()>,
@@ -46,10 +24,3 @@ async fn election_timeout(
         warn!("Election timeout triggered but failed to send warning via oneshot");
     }
 }
-
-/*
- * Who fires the first ever message?
- * - Broadcast (but each has a retry for failures)
- * Streams are only initiated on the first dial
- *
- */
