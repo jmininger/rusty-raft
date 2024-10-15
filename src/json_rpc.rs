@@ -8,15 +8,28 @@ use serde::{
 #[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize, Deserialize)]
 pub struct RequestId(pub u64);
 
+impl From<u64> for RequestId {
+    fn from(id: u64) -> Self {
+        Self(id)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Request {
-    id: RequestId,
-    method: String,
-    params: serde_json::Value,
+    pub id: RequestId,
+    pub method: String,
+    pub params: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
-    id: RequestId,
-    result: serde_json::Value,
+    pub id: RequestId,
+    pub result: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Message {
+    Request(Request),
+    Response(Response),
 }
