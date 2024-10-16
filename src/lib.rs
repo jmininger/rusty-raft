@@ -1,9 +1,9 @@
 pub mod connection;
 pub mod election;
 pub mod json_rpc;
+pub mod network;
 pub mod utils;
 
-// pub mod network;
 // pub mod connection_manager;
 // pub mod context;
 // pub mod log;
