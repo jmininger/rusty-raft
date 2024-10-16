@@ -7,10 +7,6 @@
 
 use std::{
     error::Error,
-    future::{
-        pending,
-        Future,
-    },
     net::SocketAddr,
 };
 
@@ -35,20 +31,20 @@ use tokio_serde::{
     SymmetricallyFramed,
 };
 use tokio_stream::StreamExt;
-use tokio_util::{
-    codec::{
-        FramedRead,
-        FramedWrite,
-        LengthDelimitedCodec,
-    },
-    either::Either,
+use tokio_util::codec::{
+    FramedRead,
+    FramedWrite,
+    LengthDelimitedCodec,
 };
 
-use crate::json_rpc::{
-    Message as RpcMessage,
-    Request as RpcRequest,
-    RequestId,
-    Response as RpcResponse,
+use crate::{
+    json_rpc::{
+        Message as RpcMessage,
+        Request as RpcRequest,
+        RequestId,
+        Response as RpcResponse,
+    },
+    utils::dynamic_fut,
 };
 
 pub type JsonWriteFrame = SymmetricallyFramed<
@@ -243,17 +239,5 @@ impl ConnectionActor {
         let id = self.request_id;
         self.request_id += 1;
         RequestId(id)
-    }
-}
-
-/// Util function that lets us use Option<impl Future<_>> in a select! block
-fn dynamic_fut<T, F, E>(maybe_rx: Option<F>) -> impl Future<Output = Result<T, E>>
-where
-    F: Future<Output = Result<T, E>>,
-    E: Error,
-{
-    match maybe_rx {
-        Some(rx) => Either::Left(rx),
-        None => Either::Right(pending()),
     }
 }
