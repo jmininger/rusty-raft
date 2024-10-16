@@ -92,6 +92,7 @@ pub struct ConnectionActor {
 }
 
 impl ConnectionActor {
+    /// Creates Read/Write frames for the raw socket and initializes the ConnectionActor
     pub fn new(
         addr: SocketAddr,
         raw_sock: TcpStream,
@@ -126,46 +127,54 @@ impl ConnectionActor {
     pub async fn run(mut self, inbound_req_handle: mpsc::Sender<(RpcRequest, ResponseHandle)>) {
         loop {
             let outbound_resp_alert = dynamic_fut(self.outbound_resp_alert.take());
-
             tokio::select! {
-                // The application has handled a request it recieved and is now ready to send the
-                // response back to the peer
-                res = outbound_resp_alert => {
-                    match res {
-                        Ok(resp) => {
-                            self.write_conn.send(RpcMessage::Response(resp)).await.map_err(|_| {
-                                tracing::error!("Error sending response to peer {}", self.addr);
-                            });
-                        },
-                        Err(_recv_err) => {
-                            todo!("Handle dropped");
-                        }
-                    }
-                },
+                res = outbound_resp_alert => self.handle_outbound_response(res).await,
+                res = self.outbound_req_alert.recv() => self.handle_outbound_request(res).await,
+                Some(msg) = self.read_conn.next() => self.handle_inbound_read(msg, inbound_req_handle.clone()).await,
+            }
+        }
+    }
 
-                // The application wishes to make a request to this peer and will await the
-                // response
-                res = self.outbound_req_alert.recv() => {
-                    match res {
-                        Some((req, resp_trigger)) => {
-                            self.send_outbound_request(req, resp_trigger).await;
-                        },
-                        None => todo!("Handle dropped connection"),
-                    }
-                },
-                // The peer has sent a message for us to read and process; it will either be a
-                // request or a response to a previous request
-                Some(msg) = self.read_conn.next() => {
-                    match msg {
-                        Ok(msg) => {
-                            self.handle_inbound(msg, inbound_req_handle.clone()).await;
-                        },
-                        Err(e) => {
-                            tracing::error!("Error reading from peer {}: {}", self.addr, e);
-                            todo!("Unwind, deallocate everything, and probably send a msg up to the ConnectionManager to let them know to remove");
-                        }
-                    }
-                },
+    async fn handle_outbound_response(&mut self, res: Result<RpcResponse, impl Error>) {
+        match res {
+            Ok(resp) => {
+                self.write_conn
+                    .send(RpcMessage::Response(resp))
+                    .await
+                    .map_err(|_| {
+                        tracing::error!("Error sending response to peer {}", self.addr);
+                    });
+            }
+            Err(_recv_err) => {
+                todo!("Handle dropped");
+            }
+        }
+    }
+
+    async fn handle_outbound_request(&mut self, res: Option<(RpcRequest, ResponseHandle)>) {
+        match res {
+            Some((req, resp_trigger)) => {
+                self.send_outbound_request(req, resp_trigger).await;
+            }
+            None => todo!("Handle dropped connection"),
+        }
+    }
+
+    async fn handle_inbound_read(
+        &mut self,
+        msg: Result<RpcMessage, impl Error>,
+        inbound_req_handle: mpsc::Sender<(RpcRequest, ResponseHandle)>,
+    ) {
+        match msg {
+            Ok(msg) => {
+                self.handle_inbound_message(msg, inbound_req_handle).await;
+            }
+            Err(e) => {
+                tracing::error!("Error reading from peer {}: {}", self.addr, e);
+                todo!(
+                    "Unwind, deallocate everything, and probably send a msg up to the \
+                     ConnectionManager to let them know to remove"
+                );
             }
         }
     }
@@ -184,7 +193,7 @@ impl ConnectionActor {
         }
     }
 
-    async fn handle_inbound(
+    async fn handle_inbound_message(
         &mut self,
         msg: RpcMessage,
         inbound_req_handle: mpsc::Sender<(RpcRequest, ResponseHandle)>,
