@@ -5,7 +5,7 @@ use serde::{
     Serialize,
 };
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RequestId(pub u64);
 
 impl From<u64> for RequestId {

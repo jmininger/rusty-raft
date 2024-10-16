@@ -1,7 +1,16 @@
 //! Connection
+//!   ## Some important invariants:
+//!     - A connection will not receive more than one request without receiving a response back
+//!     - A connection CANNOT service both an inbound request and an outbound request at the same
+//!       time -- TODO: Should double check whether this is a property we want given raft's flow --
+//!       Nonetheless, it should simplify things for now
 
 use std::{
-    collections::HashMap,
+    error::Error,
+    future::{
+        pending,
+        Future,
+    },
     net::SocketAddr,
 };
 
@@ -16,7 +25,9 @@ use tokio::{
     },
     sync::{
         mpsc,
-        oneshot,
+        oneshot::{
+            self,
+        },
     },
 };
 use tokio_serde::{
@@ -24,55 +35,58 @@ use tokio_serde::{
     SymmetricallyFramed,
 };
 use tokio_stream::StreamExt;
-use tokio_util::codec::{
-    FramedRead,
-    FramedWrite,
-    LengthDelimitedCodec,
+use tokio_util::{
+    codec::{
+        FramedRead,
+        FramedWrite,
+        LengthDelimitedCodec,
+    },
+    either::Either,
 };
 
 use crate::json_rpc::{
+    Message as RpcMessage,
     Request as RpcRequest,
     RequestId,
     Response as RpcResponse,
 };
 
-// type PeerId = SocketAddr;
-
 pub type JsonWriteFrame = SymmetricallyFramed<
     FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>,
-    serde_json::Value,
-    SymmetricalJson<serde_json::Value>,
+    RpcMessage,
+    SymmetricalJson<RpcMessage>,
 >;
 
 pub type JsonReadFrame = SymmetricallyFramed<
     FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
-    serde_json::Value,
-    SymmetricalJson<serde_json::Value>,
+    RpcMessage,
+    SymmetricalJson<RpcMessage>,
 >;
 
-/// Allows us to send requests and await responses via oneshot
-pub type ConnectionHandle = mpsc::Sender<(RpcRequest, oneshot::Sender<RpcResponse>)>;
+/// ConnectionHandle allows us to send requests and await responses via oneshot
+pub type ConnectionHandle = mpsc::Sender<(RpcRequest, ResponseHandle)>;
 
-/// Represents a single live connection to a peer
+pub type ResponseHandle = oneshot::Sender<RpcResponse>;
 
-//////////////////////////////////////////////
-// TODO: I currently have no way to send requests up the chain from single connection to the
-// connection manager
-//////////////////////////////////////////////
 pub struct ConnectionActor {
     /// Socket address of the peer
     addr: SocketAddr,
-    /// Resource write half of socket
+    /// Write half of connection; Writes JsonRpcMessage types
     write_conn: JsonWriteFrame,
-    ///reader
+    /// Read half of connection; Read JsonRpcMessage types
     read_conn: JsonReadFrame,
-    /// Maps requests and
-    requests: HashMap<RequestId, oneshot::Sender<serde_json::Value>>,
-    /// req_alert listens for incoming requests
-    // NOTE: I'm not yet sure if this just listens for new requests to fill or if it also listens
-    // for responses to send out
-    req_alert: mpsc::Receiver<(RpcRequest, oneshot::Sender<RpcResponse>)>,
 
+    /// Used to listen for responses to requests that the application is servicing
+    outbound_resp_alert: Option<oneshot::Receiver<RpcResponse>>,
+
+    /// Used for the application to send requests to the peer over this connection
+    outbound_req_alert: mpsc::Receiver<(RpcRequest, ResponseHandle)>,
+
+    /// Used for notifying the application that the request that was sent out to the peer has been
+    /// responded to
+    active_outbound_request: Option<(RequestId, ResponseHandle)>,
+
+    ///TODO: Not currently used anywhere
     request_id: u64,
     // request_id: RequestId,
 }
@@ -81,44 +95,74 @@ impl ConnectionActor {
     pub fn new(
         addr: SocketAddr,
         raw_sock: TcpStream,
-        req_alert: mpsc::Receiver<(RpcRequest, oneshot::Sender<RpcResponse>)>,
+        outbound_req_alert: mpsc::Receiver<(RpcRequest, ResponseHandle)>,
     ) -> Self {
         let (read_raw, write_raw) = raw_sock.into_split();
 
         let write_conn: JsonWriteFrame = SymmetricallyFramed::new(
             FramedWrite::new(write_raw, LengthDelimitedCodec::new()),
-            SymmetricalJson::<serde_json::Value>::default(),
+            SymmetricalJson::<RpcMessage>::default(),
         );
 
         let read_conn = SymmetricallyFramed::new(
             FramedRead::new(read_raw, LengthDelimitedCodec::new()),
-            SymmetricalJson::<serde_json::Value>::default(),
+            SymmetricalJson::<RpcMessage>::default(),
         );
         Self {
             addr,
             write_conn,
             read_conn,
-            req_alert,
-            requests: HashMap::new(),
+            outbound_req_alert,
+            active_outbound_request: None,
+            outbound_resp_alert: None,
             request_id: 0,
         }
     }
 
-    pub async fn run(mut self) {
+    /// This is the only exposed function (excluding the constructor). The application calls this
+    /// method every time it receives a new connection over the socket. Inbound and outbound
+    /// responses are handled with oneshots. Multi-producer, single-consumer channels are used to
+    /// communicate requests between the application and the ConnectionActor
+    pub async fn run(mut self, inbound_req_handle: mpsc::Sender<(RpcRequest, ResponseHandle)>) {
         loop {
+            let outbound_resp_alert = dynamic_fut(self.outbound_resp_alert.take());
+
             tokio::select! {
-                Some((req, resp_trigger)) = self.req_alert.recv() => {
-                    todo!();
-                    // self.handle_outgoing_req(msg).await;
+                // The application has handled a request it recieved and is now ready to send the
+                // response back to the peer
+                res = outbound_resp_alert => {
+                    match res {
+                        Ok(resp) => {
+                            self.write_conn.send(RpcMessage::Response(resp)).await.map_err(|_| {
+                                tracing::error!("Error sending response to peer {}", self.addr);
+                            });
+                        },
+                        Err(_recv_err) => {
+                            todo!("Handle dropped");
+                        }
+                    }
                 },
+
+                // The application wishes to make a request to this peer and will await the
+                // response
+                res = self.outbound_req_alert.recv() => {
+                    match res {
+                        Some((req, resp_trigger)) => {
+                            self.send_outbound_request(req, resp_trigger).await;
+                        },
+                        None => todo!("Handle dropped connection"),
+                    }
+                },
+                // The peer has sent a message for us to read and process; it will either be a
+                // request or a response to a previous request
                 Some(msg) = self.read_conn.next() => {
                     match msg {
                         Ok(msg) => {
-                            todo!();
-                            // self.handle_response(msg).await;
+                            self.handle_inbound(msg, inbound_req_handle.clone()).await;
                         },
                         Err(e) => {
                             tracing::error!("Error reading from peer {}: {}", self.addr, e);
+                            todo!("Unwind, deallocate everything, and probably send a msg up to the ConnectionManager to let them know to remove");
                         }
                     }
                 },
@@ -126,36 +170,85 @@ impl ConnectionActor {
         }
     }
 
-    async fn send_request(
-        &mut self,
-        msg: serde_json::Value,
-        tx: oneshot::Sender<serde_json::Value>,
-    ) {
-        let id = self.request_id();
-        if let Some(_) = self.requests.insert(id.clone(), tx) {
+    async fn send_outbound_request(&mut self, req: RpcRequest, tx: ResponseHandle) {
+        let id = req.id.clone();
+        let msg = RpcMessage::Request(req);
+
+        if self.active_outbound_request.is_some() {
             tracing::error!("Duplicate request id {} for peer {}", id.0, self.addr);
-        }
-        self.write_conn
-            .send(msg)
-            .await
-            .map_err(|_| {
+        } else {
+            self.active_outbound_request = Some((id, tx));
+            self.write_conn.send(msg).await.map_err(|_| {
                 tracing::error!("Error sending request to peer {}", self.addr);
-            })
-            .unwrap();
+            });
+        }
     }
 
-    // match self.requests.remove(&id) {
-    //     Some(tx) => {
-    //         tx.send(res).unwrap();
-    //     },
-    //     None => {
-    //         tracing::error!("No request found for id {} for peer {}", id.0, self.addr);
-    //     }
-    // }
+    async fn handle_inbound(
+        &mut self,
+        msg: RpcMessage,
+        inbound_req_handle: mpsc::Sender<(RpcRequest, ResponseHandle)>,
+    ) {
+        match msg {
+            RpcMessage::Request(req) => {
+                let (tx, rx) = oneshot::channel();
+                match self.outbound_resp_alert {
+                    Some(_) => {
+                        tracing::error!(
+                            "Received a second inbound request before responding to the first"
+                        );
+                    }
+                    None => {
+                        self.outbound_resp_alert = Some(rx);
+                        inbound_req_handle
+                            .send((req, tx))
+                            .await
+                            .expect("Inbound request handler dropped before response sent");
+                    }
+                }
+            }
+            RpcMessage::Response(resp) => {
+                if let Some((outbound_id, resp_trigger)) = self.active_outbound_request.take() {
+                    if outbound_id == resp.id {
+                        resp_trigger
+                            .send(resp)
+                            .expect("Response handler dropped before response sent");
+                    } else {
+                        self.active_outbound_request = Some((outbound_id, resp_trigger));
+                        tracing::error!(
+                            "Received response with mismatched id from peer {}: expected {}, got \
+                             {}",
+                            self.addr,
+                            outbound_id.0,
+                            resp.id.0,
+                        );
+                    }
+                } else {
+                    tracing::error!(
+                        "Received unexpected response from peer {}: {}",
+                        self.addr,
+                        resp.id.0,
+                    );
+                }
+            }
+        }
+    }
 
     fn request_id(&mut self) -> RequestId {
         let id = self.request_id;
         self.request_id += 1;
         RequestId(id)
+    }
+}
+
+/// Util function that lets us use Option<impl Future<_>> in a select! block
+fn dynamic_fut<T, F, E>(maybe_rx: Option<F>) -> impl Future<Output = Result<T, E>>
+where
+    F: Future<Output = Result<T, E>>,
+    E: Error,
+{
+    match maybe_rx {
+        Some(rx) => Either::Left(rx),
+        None => Either::Right(pending()),
     }
 }
