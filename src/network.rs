@@ -97,6 +97,7 @@ impl NetworkManager {
         self.connection_map.next().await
     }
 
+    /// Open up a connection with a new peer
     pub async fn dial_peer(&mut self, addr: SocketAddr) -> Result<()> {
         let raw_sock = TcpStream::connect(addr).await?;
         self.handle_new_connection(addr, raw_sock);
@@ -106,8 +107,8 @@ impl NetworkManager {
     /// Takes a new socket connection and spins up a new ConnectionActor to manage it
     pub fn handle_new_connection(&mut self, addr: SocketAddr, raw_sock: TcpStream) {
         let (outbound_req_handle, outbound_req_alert) = mpsc::channel(32);
-        let actor = ConnectionActor::new(addr, raw_sock, outbound_req_alert);
         let (inbound_req_handle, inbound_req_alert) = mpsc::channel(32);
+        let actor = ConnectionActor::new(addr, raw_sock, outbound_req_alert, inbound_req_handle);
         if let Some(_) = self
             .connection_map
             .insert(addr.clone(), ReceiverStream::new(inbound_req_alert))
@@ -121,6 +122,6 @@ impl NetworkManager {
                 addr
             );
         }
-        tokio::spawn(async move { actor.run(inbound_req_handle).await });
+        tokio::spawn(async move { actor.run().await });
     }
 }

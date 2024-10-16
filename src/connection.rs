@@ -1,5 +1,4 @@
-//! Connection
-//!   ## Some important invariants:
+//!   ### Some important invariants:
 //!     - A connection will not receive more than one request without receiving a response back
 //!     - A connection CANNOT service both an inbound request and an outbound request at the same
 //!       time -- TODO: Should double check whether this is a property we want given raft's flow --
@@ -47,23 +46,28 @@ use crate::{
     utils::dynamic_fut,
 };
 
-pub type JsonWriteFrame = SymmetricallyFramed<
+type JsonWriteFrame = SymmetricallyFramed<
     FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>,
     RpcMessage,
     SymmetricalJson<RpcMessage>,
 >;
 
-pub type JsonReadFrame = SymmetricallyFramed<
+type JsonReadFrame = SymmetricallyFramed<
     FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
     RpcMessage,
     SymmetricalJson<RpcMessage>,
 >;
 
-/// ConnectionHandle allows us to send requests and await responses via oneshot
+/// [`ConnectionHandle`] allows us to send requests from the ConnectionActor to the rest of the
+/// application
 pub type ConnectionHandle = mpsc::Sender<(RpcRequest, ResponseHandle)>;
 
+/// [`ResponseHandle`] allows us to send responses back to the peer/app
 pub type ResponseHandle = oneshot::Sender<RpcResponse>;
 
+/// [`ConnectionActor`] is responsible for handling the connection to a single peer. It parses
+/// inbound requests/responses into [`JsonRpcMessage`] types and sends outbound requests/responses
+/// to the peer
 pub struct ConnectionActor {
     /// Socket address of the peer
     addr: SocketAddr,
@@ -71,6 +75,9 @@ pub struct ConnectionActor {
     write_conn: JsonWriteFrame,
     /// Read half of connection; Read JsonRpcMessage types
     read_conn: JsonReadFrame,
+
+    /// Used to send inbound requests to the application
+    inbound_req_handle: ConnectionHandle,
 
     /// Used to listen for responses to requests that the application is servicing
     outbound_resp_alert: Option<oneshot::Receiver<RpcResponse>>,
@@ -93,6 +100,7 @@ impl ConnectionActor {
         addr: SocketAddr,
         raw_sock: TcpStream,
         outbound_req_alert: mpsc::Receiver<(RpcRequest, ResponseHandle)>,
+        inbound_req_handle: ConnectionHandle,
     ) -> Self {
         let (read_raw, write_raw) = raw_sock.into_split();
 
@@ -109,6 +117,7 @@ impl ConnectionActor {
             addr,
             write_conn,
             read_conn,
+            inbound_req_handle,
             outbound_req_alert,
             active_outbound_request: None,
             outbound_resp_alert: None,
@@ -119,14 +128,14 @@ impl ConnectionActor {
     /// This is the only exposed function (excluding the constructor). The application calls this
     /// method every time it receives a new connection over the socket. Inbound and outbound
     /// responses are handled with oneshots. Multi-producer, single-consumer channels are used to
-    /// communicate requests between the application and the ConnectionActor
-    pub async fn run(mut self, inbound_req_handle: mpsc::Sender<(RpcRequest, ResponseHandle)>) {
+    /// communicate requests between the application and the [`ConnectionActor`]
+    pub async fn run(mut self) {
         loop {
             let outbound_resp_alert = dynamic_fut(self.outbound_resp_alert.take());
             tokio::select! {
                 res = outbound_resp_alert => self.handle_outbound_response(res).await,
                 res = self.outbound_req_alert.recv() => self.handle_outbound_request(res).await,
-                Some(msg) = self.read_conn.next() => self.handle_inbound_read(msg, inbound_req_handle.clone()).await,
+                Some(msg) = self.read_conn.next() => self.handle_inbound_read(msg).await,
             }
         }
     }
@@ -137,7 +146,7 @@ impl ConnectionActor {
                 self.write_conn
                     .send(RpcMessage::Response(resp))
                     .await
-                    .map_err(|_| {
+                    .unwrap_or_else(|_| {
                         tracing::error!("Error sending response to peer {}", self.addr);
                     });
             }
@@ -157,7 +166,7 @@ impl ConnectionActor {
                     tracing::error!("Duplicate request id {} for peer {}", id.0, self.addr);
                 } else {
                     self.active_outbound_request = Some((id, resp_trigger));
-                    self.write_conn.send(msg).await.map_err(|_| {
+                    self.write_conn.send(msg).await.unwrap_or_else(|_| {
                         tracing::error!("Error sending request to peer {}", self.addr);
                     });
                 }
@@ -166,14 +175,10 @@ impl ConnectionActor {
         }
     }
 
-    async fn handle_inbound_read(
-        &mut self,
-        msg: Result<RpcMessage, impl Error>,
-        inbound_req_handle: mpsc::Sender<(RpcRequest, ResponseHandle)>,
-    ) {
+    async fn handle_inbound_read(&mut self, msg: Result<RpcMessage, impl Error>) {
         match msg {
             Ok(msg) => {
-                self.handle_inbound_message(msg, inbound_req_handle).await;
+                self.handle_inbound_message(msg).await;
             }
             Err(e) => {
                 tracing::error!("Error reading from peer {}: {}", self.addr, e);
@@ -185,11 +190,7 @@ impl ConnectionActor {
         }
     }
 
-    async fn handle_inbound_message(
-        &mut self,
-        msg: RpcMessage,
-        inbound_req_handle: mpsc::Sender<(RpcRequest, ResponseHandle)>,
-    ) {
+    async fn handle_inbound_message(&mut self, msg: RpcMessage) {
         match msg {
             RpcMessage::Request(req) => {
                 let (tx, rx) = oneshot::channel();
@@ -201,7 +202,7 @@ impl ConnectionActor {
                     }
                     None => {
                         self.outbound_resp_alert = Some(rx);
-                        inbound_req_handle
+                        self.inbound_req_handle
                             .send((req, tx))
                             .await
                             .expect("Inbound request handler dropped before response sent");
