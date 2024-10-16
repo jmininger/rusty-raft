@@ -154,7 +154,17 @@ impl ConnectionActor {
     async fn handle_outbound_request(&mut self, res: Option<(RpcRequest, ResponseHandle)>) {
         match res {
             Some((req, resp_trigger)) => {
-                self.send_outbound_request(req, resp_trigger).await;
+                let id = req.id.clone();
+                let msg = RpcMessage::Request(req);
+
+                if self.active_outbound_request.is_some() {
+                    tracing::error!("Duplicate request id {} for peer {}", id.0, self.addr);
+                } else {
+                    self.active_outbound_request = Some((id, resp_trigger));
+                    self.write_conn.send(msg).await.map_err(|_| {
+                        tracing::error!("Error sending request to peer {}", self.addr);
+                    });
+                }
             }
             None => todo!("Handle dropped connection"),
         }
@@ -176,20 +186,6 @@ impl ConnectionActor {
                      ConnectionManager to let them know to remove"
                 );
             }
-        }
-    }
-
-    async fn send_outbound_request(&mut self, req: RpcRequest, tx: ResponseHandle) {
-        let id = req.id.clone();
-        let msg = RpcMessage::Request(req);
-
-        if self.active_outbound_request.is_some() {
-            tracing::error!("Duplicate request id {} for peer {}", id.0, self.addr);
-        } else {
-            self.active_outbound_request = Some((id, tx));
-            self.write_conn.send(msg).await.map_err(|_| {
-                tracing::error!("Error sending request to peer {}", self.addr);
-            });
         }
     }
 
