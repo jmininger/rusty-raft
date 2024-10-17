@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
                 .expect("Failed to bind to local address");
             while let Ok((raw_sock, addr)) = listener.accept().await {
                 let mut network = network.lock().await;
-                network.handle_new_connection(addr, raw_sock);
+                network.handle_new_inbound_connection(addr, raw_sock);
             }
         }
     });

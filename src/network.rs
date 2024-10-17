@@ -120,19 +120,27 @@ impl NetworkManager {
 
     /// Open up a connection with a new peer
     pub async fn dial_peer(&mut self, addr: SocketAddr) -> Result<()> {
+        tracing::debug!("Dialing peer {}", addr);
         let raw_sock = TcpStream::connect(addr).await?;
-        tracing::debug!("Connected to peer {}", addr);
         self.handle_new_connection(addr, raw_sock);
+        tracing::info!("Sucessfully dialed peer {}", addr);
         Ok(())
     }
 
+    pub fn handle_new_inbound_connection(&mut self, addr: SocketAddr, raw_sock: TcpStream) {
+        tracing::info!("Received new inbound connection from {}", addr);
+        self.handle_new_connection(addr, raw_sock);
+        tracing::debug!("Added new connection to peer {}", addr);
+    }
+
     /// Takes a new socket connection and spins up a new ConnectionActor to manage it
-    pub fn handle_new_connection(&mut self, addr: SocketAddr, raw_sock: TcpStream) {
+    fn handle_new_connection(&mut self, addr: SocketAddr, raw_sock: TcpStream) {
         let (outbound_req_handle, outbound_req_alert) = mpsc::channel(32);
         let (inbound_req_handle, inbound_req_alert) = mpsc::channel(32);
 
         let actor = ConnectionActor::new(addr, raw_sock, outbound_req_alert, inbound_req_handle);
 
+        // Add both the read/write handles to the network
         let prev_conn = self
             .connection_map
             .insert(addr.clone(), ReceiverStream::new(inbound_req_alert));
@@ -148,6 +156,7 @@ impl NetworkManager {
         self.connection_handles
             .insert(addr.clone(), outbound_req_handle);
 
+        // Manage the actor in the background
         tokio::spawn(async move { actor.run().await });
     }
 }
