@@ -22,6 +22,7 @@ use tracing::info;
 #[derive(Serialize, Deserialize)]
 struct PeerRequest {
     address: SocketAddr,
+    // address: PeerAddr,
 }
 
 #[derive(Clone, Default)]
@@ -62,7 +63,7 @@ async fn handle_orchestrator(
     State(state): State<AppState>,
     Json(req): Json<PeerRequest>,
 ) -> impl IntoResponse {
-    info!("Adding {} to orchestrator peer list", req.address);
+    info!("Serving peer list to {}", req.address);
     let mut peers = state.0.lock().await;
     let mut addresses = peers.iter().cloned().collect::<Vec<_>>();
 
