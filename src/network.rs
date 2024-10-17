@@ -9,10 +9,7 @@ use std::{
 
 use color_eyre::Result;
 use tokio::{
-    net::{
-        TcpListener,
-        TcpStream,
-    },
+    net::TcpStream,
     sync::{
         mpsc,
         oneshot,
@@ -35,28 +32,29 @@ use crate::json_rpc::{
     Response as RpcResponse,
 };
 
-async fn run_it_all() {
-    let mut conn_mgr = NetworkManager::new();
-    let local_addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
-    let listener = TcpListener::bind(local_addr).await.unwrap();
-    loop {
-        tokio::select! {
+// async fn run_it_all() {
+//     let mut conn_mgr = NetworkManager::new();
+//     let local_addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+//     let listener = TcpListener::bind(local_addr).await.unwrap();
+//     loop {
+//         tokio::select! {
 
-            Ok((raw_sock, addr)) = listener.accept() => {
-                conn_mgr.handle_new_connection(addr, raw_sock);
-                todo!();
-            },
-            Some(req) = conn_mgr.incoming_requests() => {
-                todo!();
-            },
-        }
-    }
-}
+//             Ok((raw_sock, addr)) = listener.accept() => {
+//                 conn_mgr.handle_new_connection(addr, raw_sock);
+//                 todo!();
+//             },
+//             Some(req) = conn_mgr.incoming_requests() => {
+//                 todo!();
+//             },
+//         }
+//     }
+// }
 
 /// Stream of inbound RpcRequests from a peer, with a oneshot channel to send the response
 type InboundReqListener = ReceiverStream<(RpcRequest, oneshot::Sender<RpcResponse>)>;
 
-struct NetworkManager {
+#[derive(Default)]
+pub struct NetworkManager {
     /// Read handles, multiplexed together into a single event stream via the StreamMap
     connection_map: StreamMap<SocketAddr, InboundReqListener>,
     /// Write handles to connections
@@ -64,7 +62,7 @@ struct NetworkManager {
 }
 
 impl NetworkManager {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             connection_map: StreamMap::new(),
             connection_handles: HashMap::new(),
@@ -123,6 +121,7 @@ impl NetworkManager {
     /// Open up a connection with a new peer
     pub async fn dial_peer(&mut self, addr: SocketAddr) -> Result<()> {
         let raw_sock = TcpStream::connect(addr).await?;
+        tracing::debug!("Connected to peer {}", addr);
         self.handle_new_connection(addr, raw_sock);
         Ok(())
     }
@@ -131,20 +130,24 @@ impl NetworkManager {
     pub fn handle_new_connection(&mut self, addr: SocketAddr, raw_sock: TcpStream) {
         let (outbound_req_handle, outbound_req_alert) = mpsc::channel(32);
         let (inbound_req_handle, inbound_req_alert) = mpsc::channel(32);
+
         let actor = ConnectionActor::new(addr, raw_sock, outbound_req_alert, inbound_req_handle);
-        if let Some(_) = self
+
+        let prev_conn = self
             .connection_map
-            .insert(addr.clone(), ReceiverStream::new(inbound_req_alert))
-            .and_then(|_| {
-                self.connection_handles
-                    .insert(addr.clone(), outbound_req_handle)
-            })
-        {
+            .insert(addr.clone(), ReceiverStream::new(inbound_req_alert));
+
+        if prev_conn.is_some() {
             tracing::warn!(
                 "Connection already exists for peer {}; Replacing it with new one",
                 addr
             );
         }
+
+        // Insert into `connection_handles` regardless of whether the key was present
+        self.connection_handles
+            .insert(addr.clone(), outbound_req_handle);
+
         tokio::spawn(async move { actor.run().await });
     }
 }
