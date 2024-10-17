@@ -4,6 +4,7 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
+    time::Duration,
 };
 
 use color_eyre::Result;
@@ -70,23 +71,40 @@ impl NetworkManager {
         }
     }
 
-    pub async fn broadcast(&mut self, msg: RpcRequest) -> Vec<(SocketAddr, RpcResponse)> {
+    pub fn list_connections(&self) -> Vec<SocketAddr> {
+        //note: this assumes that connection_map and connection_handles should always have the same
+        //keys
+        self.connection_handles.keys().cloned().collect()
+    }
+
+    pub async fn broadcast(
+        &mut self,
+        msg: RpcRequest,
+        timeout_ms: Duration,
+    ) -> Vec<(SocketAddr, Option<RpcResponse>)> {
         let mut responses = JoinSet::new();
-        for (_addr, conn) in self.connection_handles.iter() {
+        for (addr, conn) in self.connection_handles.iter() {
+            let addr = addr.clone();
             let (send_resp, res_alert) = oneshot::channel();
             if let Err(send_err) = conn.send((msg.clone(), send_resp)).await {
                 tracing::error!("Error sending request to connection manager: {}", send_err);
             }
-            responses.spawn(res_alert);
+            responses.spawn(async move {
+                (
+                    addr,
+                    tokio::select! {
+                        res = res_alert => res.map_err(|e| {
+                            tracing::error!("Error with peer: {}: {}", addr, e);
+                        }).ok(),
+                        _ = tokio::time::sleep(timeout_ms) => {
+                            tracing::warn!("Timed out waiting for response from peer {}", addr);
+                            None
+                        }
+                    },
+                )
+            });
         }
-        todo!()
-        // tokio::select! {
-        //     res = responses => res.into_iter().filter_map(|res| res.ok()).collect(),
-        //     _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-        //         tracing::warn!("Timed out waiting for responses");
-        //         Vec::new()
-        //     }
-        // }
+        responses.join_all().await
     }
 
     /// Multiplex incoming requests from all connections into a single Stream
@@ -95,6 +113,11 @@ impl NetworkManager {
         &mut self,
     ) -> Option<(SocketAddr, (RpcRequest, oneshot::Sender<RpcResponse>))> {
         self.connection_map.next().await
+    }
+
+    pub fn remove_connection(&mut self, addr: SocketAddr) {
+        self.connection_map.remove(&addr);
+        self.connection_handles.remove(&addr);
     }
 
     /// Open up a connection with a new peer
