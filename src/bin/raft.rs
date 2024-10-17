@@ -81,18 +81,23 @@ async fn main() -> Result<()> {
 
     //Dial peers we received from orchestrator
     let peers_to_dial = get_peers(local_addr, orchestrator_url).await?;
-    // tracing::debug!("Dialing peers: {:?}", peers_to_dial);
-    let mut network = network.lock().await;
-    for peer in peers_to_dial {
-        if let Err(e) = network.dial_peer(peer).await {
-            tracing::warn!("Failed to dial peer {}: {}", peer, e);
-        }
-    }
+    dial_peers(peers_to_dial, network.clone()).await?;
 
     // TODO: handle incoming requests
     // Some(req) = conn_mgr.incoming_requests() => {
 
     server_handle.await?;
+    Ok(())
+}
+
+async fn dial_peers(peer_list: Vec<SocketAddr>, network: Arc<Mutex<NetworkManager>>) -> Result<()> {
+    let mut network = network.lock().await;
+    for peer in peer_list {
+        if let Err(e) = network.dial_peer(peer).await {
+            tracing::warn!("Failed to dial peer {}: {}", peer, e);
+        }
+    }
+    tracing::debug!("Finished dialing initial peers");
     Ok(())
 }
 

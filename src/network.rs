@@ -124,6 +124,13 @@ impl NetworkManager {
     pub async fn dial_peer(&mut self, addr: PeerId) -> Result<()> {
         tracing::debug!("Dialing peer {}", addr);
         let raw_sock = TcpStream::connect(addr).await?;
+
+        tracing::debug!(
+            "Peer {} connected to local: {}",
+            addr,
+            raw_sock.local_addr()?
+        );
+
         self.handle_new_connection(addr, raw_sock);
         tracing::info!("Sucessfully dialed peer {}", addr);
         Ok(())
@@ -137,6 +144,8 @@ impl NetworkManager {
 
     /// Takes a new socket connection and spins up a new ConnectionActor to manage it
     fn handle_new_connection(&mut self, addr: PeerId, raw_sock: TcpStream) {
+        tracing::info!("Handling new connection from peer {}", addr);
+
         let (outbound_req_handle, outbound_req_alert) = mpsc::channel(32);
         let (inbound_req_handle, inbound_req_alert) = mpsc::channel(32);
 
