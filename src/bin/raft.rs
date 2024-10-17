@@ -51,7 +51,7 @@ fn config_from_env() -> Result<Config> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let filter = EnvFilter::new("raft=trace,rusty_raft=trace");
+    let filter = EnvFilter::from_default_env();
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let conf @ Config {

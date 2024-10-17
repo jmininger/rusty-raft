@@ -40,7 +40,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let filter = EnvFilter::new("orchestrator=info,rusty_raft=trace");
+    let filter = EnvFilter::from_default_env();
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let Args { host } = clap::Parser::parse();
