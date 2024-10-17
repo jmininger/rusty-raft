@@ -8,6 +8,7 @@ use tokio::{
 };
 use tracing::warn;
 
+#[allow(dead_code)]
 async fn election_timeout(
     mut msg_alert: mpsc::Receiver<()>,
     election_trigger: oneshot::Sender<()>,

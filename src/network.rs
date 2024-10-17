@@ -3,7 +3,6 @@
 
 use std::{
     collections::HashMap,
-    net::SocketAddr,
     time::Duration,
 };
 
@@ -22,14 +21,17 @@ use tokio_stream::{
     StreamMap,
 };
 
-use crate::connection::{
-    ConnectionActor,
-    ConnectionHandle,
-};
 use crate::json_rpc::{
     Request as RpcRequest,
     // RequestId,
     Response as RpcResponse,
+};
+use crate::{
+    connection::{
+        ConnectionActor,
+        ConnectionHandle,
+    },
+    peer::PeerId,
 };
 
 // async fn run_it_all() {
@@ -56,9 +58,9 @@ type InboundReqListener = ReceiverStream<(RpcRequest, oneshot::Sender<RpcRespons
 #[derive(Default)]
 pub struct NetworkManager {
     /// Read handles, multiplexed together into a single event stream via the StreamMap
-    connection_map: StreamMap<SocketAddr, InboundReqListener>,
+    connection_map: StreamMap<PeerId, InboundReqListener>,
     /// Write handles to connections
-    connection_handles: HashMap<SocketAddr, ConnectionHandle>,
+    connection_handles: HashMap<PeerId, ConnectionHandle>,
 }
 
 impl NetworkManager {
@@ -69,7 +71,7 @@ impl NetworkManager {
         }
     }
 
-    pub fn list_connections(&self) -> Vec<SocketAddr> {
+    pub fn list_connections(&self) -> Vec<PeerId> {
         //note: this assumes that connection_map and connection_handles should always have the same
         //keys
         self.connection_handles.keys().cloned().collect()
@@ -79,7 +81,7 @@ impl NetworkManager {
         &mut self,
         msg: RpcRequest,
         timeout_ms: Duration,
-    ) -> Vec<(SocketAddr, Option<RpcResponse>)> {
+    ) -> Vec<(PeerId, Option<RpcResponse>)> {
         let mut responses = JoinSet::new();
         for (addr, conn) in self.connection_handles.iter() {
             let addr = addr.clone();
@@ -109,17 +111,17 @@ impl NetworkManager {
     /// Returns None if there are no more connections
     pub async fn incoming_requests(
         &mut self,
-    ) -> Option<(SocketAddr, (RpcRequest, oneshot::Sender<RpcResponse>))> {
+    ) -> Option<(PeerId, (RpcRequest, oneshot::Sender<RpcResponse>))> {
         self.connection_map.next().await
     }
 
-    pub fn remove_connection(&mut self, addr: SocketAddr) {
+    pub fn remove_connection(&mut self, addr: PeerId) {
         self.connection_map.remove(&addr);
         self.connection_handles.remove(&addr);
     }
 
     /// Open up a connection with a new peer
-    pub async fn dial_peer(&mut self, addr: SocketAddr) -> Result<()> {
+    pub async fn dial_peer(&mut self, addr: PeerId) -> Result<()> {
         tracing::debug!("Dialing peer {}", addr);
         let raw_sock = TcpStream::connect(addr).await?;
         self.handle_new_connection(addr, raw_sock);
@@ -127,14 +129,14 @@ impl NetworkManager {
         Ok(())
     }
 
-    pub fn handle_new_inbound_connection(&mut self, addr: SocketAddr, raw_sock: TcpStream) {
+    pub fn handle_new_inbound_connection(&mut self, addr: PeerId, raw_sock: TcpStream) {
         tracing::info!("Received new inbound connection from {}", addr);
         self.handle_new_connection(addr, raw_sock);
         tracing::debug!("Added new connection to peer {}", addr);
     }
 
     /// Takes a new socket connection and spins up a new ConnectionActor to manage it
-    fn handle_new_connection(&mut self, addr: SocketAddr, raw_sock: TcpStream) {
+    fn handle_new_connection(&mut self, addr: PeerId, raw_sock: TcpStream) {
         let (outbound_req_handle, outbound_req_alert) = mpsc::channel(32);
         let (inbound_req_handle, inbound_req_alert) = mpsc::channel(32);
 

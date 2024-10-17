@@ -18,6 +18,7 @@ use serde::{
 };
 use tokio::sync::Mutex;
 use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Serialize, Deserialize)]
 struct PeerRequest {
@@ -39,7 +40,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    let filter = EnvFilter::new("orchestrator=info,rusty_raft=trace");
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let Args { host } = clap::Parser::parse();
 
@@ -72,5 +74,6 @@ async fn handle_orchestrator(
     if !peers.insert(req.address) {
         addresses.retain(|&addr| addr != req.address);
     }
+    tracing::debug!("Peers: {:?}", addresses);
     Json(addresses)
 }

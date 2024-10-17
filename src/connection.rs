@@ -4,10 +4,7 @@
 //!       time -- TODO: Should double check whether this is a property we want given raft's flow --
 //!       Nonetheless, it should simplify things for now
 
-use std::{
-    error::Error,
-    net::SocketAddr,
-};
+use std::error::Error;
 
 use futures::SinkExt;
 use tokio::{
@@ -43,6 +40,7 @@ use crate::{
         RequestId,
         Response as RpcResponse,
     },
+    peer::PeerId,
     utils::dynamic_fut,
 };
 
@@ -70,7 +68,7 @@ pub type ResponseHandle = oneshot::Sender<RpcResponse>;
 /// to the peer
 pub struct ConnectionActor {
     /// Socket address of the peer
-    addr: SocketAddr,
+    addr: PeerId,
     /// Write half of connection; Writes JsonRpcMessage types
     write_conn: JsonWriteFrame,
     /// Read half of connection; Read JsonRpcMessage types
@@ -90,14 +88,14 @@ pub struct ConnectionActor {
     active_outbound_request: Option<(RequestId, ResponseHandle)>,
 
     ///TODO: Not currently used anywhere
-    request_id: u64,
+    _request_id: u64,
     // request_id: RequestId,
 }
 
 impl ConnectionActor {
     /// Creates Read/Write frames for the raw socket and initializes the ConnectionActor
     pub fn new(
-        addr: SocketAddr,
+        addr: PeerId,
         raw_sock: TcpStream,
         outbound_req_alert: mpsc::Receiver<(RpcRequest, ResponseHandle)>,
         inbound_req_handle: ConnectionHandle,
@@ -121,7 +119,7 @@ impl ConnectionActor {
             outbound_req_alert,
             active_outbound_request: None,
             outbound_resp_alert: None,
-            request_id: 0,
+            _request_id: 0,
         }
     }
 
@@ -236,9 +234,9 @@ impl ConnectionActor {
         }
     }
 
-    fn request_id(&mut self) -> RequestId {
-        let id = self.request_id;
-        self.request_id += 1;
-        RequestId(id)
-    }
+    // fn request_id(&mut self) -> RequestId {
+    //     let id = self.request_id;
+    //     self.request_id += 1;
+    //     RequestId(id)
+    // }
 }
