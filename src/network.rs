@@ -84,7 +84,7 @@ impl NetworkManager {
     ) -> Vec<(PeerId, Option<RpcResponse>)> {
         let mut responses = JoinSet::new();
         for (addr, conn) in self.connection_handles.iter() {
-            let addr = addr.clone();
+            let addr = *addr;
             let (send_resp, res_alert) = oneshot::channel();
             if let Err(send_err) = conn.send((msg.clone(), send_resp)).await {
                 tracing::error!("Error sending request to connection manager: {}", send_err);
@@ -145,7 +145,7 @@ impl NetworkManager {
         // Add both the read/write handles to the network
         let prev_conn = self
             .connection_map
-            .insert(addr.clone(), ReceiverStream::new(inbound_req_alert));
+            .insert(addr, ReceiverStream::new(inbound_req_alert));
 
         if prev_conn.is_some() {
             tracing::warn!(
@@ -155,8 +155,7 @@ impl NetworkManager {
         }
 
         // Insert into `connection_handles` regardless of whether the key was present
-        self.connection_handles
-            .insert(addr.clone(), outbound_req_handle);
+        self.connection_handles.insert(addr, outbound_req_handle);
 
         // Manage the actor in the background
         tokio::spawn(async move { actor.run().await });

@@ -21,7 +21,7 @@ async fn election_timeout(
             _ = tokio::time::sleep(std::time::Duration::from_millis(rand_timeout)) => break,
         }
     }
-    if let Err(_) = election_trigger.send(()) {
+    if election_trigger.send(()).is_err() {
         warn!("Election timeout triggered but failed to send warning via oneshot");
     }
 }

@@ -157,7 +157,7 @@ impl ConnectionActor {
     async fn handle_outbound_request(&mut self, res: Option<(RpcRequest, ResponseHandle)>) {
         match res {
             Some((req, resp_trigger)) => {
-                let id = req.id.clone();
+                let id = req.id;
                 let msg = RpcMessage::Request(req);
 
                 if self.active_outbound_request.is_some() {

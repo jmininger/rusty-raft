@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
 
     tracing::info!("Starting node with config: {}", conf);
 
-    let orchestrator_url = Url::parse(&format!("http://{}/", orchestrator_addr.to_string()))?;
+    let orchestrator_url = Url::parse(&format!("http://{}/", orchestrator_addr))?;
 
     let network: Arc<Mutex<NetworkManager>> = Default::default();
 
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
     let server_handle = tokio::spawn({
         let network = network.clone();
         async move {
-            let listener = TcpListener::bind(local_addr.clone())
+            let listener = TcpListener::bind(local_addr)
                 .await
                 .expect("Failed to bind to local address");
             while let Ok((raw_sock, addr)) = listener.accept().await {
