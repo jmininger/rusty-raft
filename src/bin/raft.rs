@@ -14,9 +14,12 @@ use rusty_raft::{
     //     Request as RpcRequest,
     //     Response as RpcResponse,
     // },
-    network::NetworkManager,
+    network::{
+        dial_peer,
+        NetworkManager,
+    },
+    peer::PeerId,
 };
-use serde::Serialize;
 use tokio::{
     net::TcpListener,
     sync::Mutex,
@@ -27,6 +30,7 @@ use tracing_subscriber::EnvFilter;
 struct Config {
     orchestrator_addr: SocketAddr,
     local_addr: SocketAddr,
+    node_id: u8,
 }
 
 impl std::fmt::Display for Config {
@@ -43,9 +47,11 @@ fn config_from_env() -> Result<Config> {
     dotenv::dotenv()?;
     let orchestrator_addr: SocketAddr = env::var("ORCHESTRATOR_ADDR")?.parse()?;
     let local_addr: SocketAddr = env::var("LOCAL_ADDR")?.parse()?;
+    let node_id: u8 = env::var("NODE_ID")?.parse()?;
     Ok(Config {
         orchestrator_addr,
         local_addr,
+        node_id,
     })
 }
 
@@ -57,31 +63,44 @@ async fn main() -> Result<()> {
     let conf @ Config {
         orchestrator_addr,
         local_addr,
+        node_id,
     } = config_from_env()?;
 
     tracing::info!("Starting node with config: {}", conf);
 
     let orchestrator_url = Url::parse(&format!("http://{}/", orchestrator_addr))?;
 
-    let network: Arc<Mutex<NetworkManager>> = Default::default();
+    let host_id = PeerId {
+        dial_addr: local_addr,
+        common_name: format!("node-{}", node_id),
+    };
+    let network: Arc<Mutex<NetworkManager>> =
+        Arc::new(Mutex::new(NetworkManager::new(host_id.clone())));
+
+    let host_id_clone = host_id.clone();
+    let network_clone = network.clone();
 
     // Start listener for new tcp connections
     let server_handle = tokio::spawn({
-        let network = network.clone();
+        let host_id = host_id_clone;
+        let network = network_clone;
         async move {
-            let listener = TcpListener::bind(local_addr)
+            let listener = TcpListener::bind(host_id.dial_addr)
                 .await
                 .expect("Failed to bind to local address");
-            while let Ok((raw_sock, addr)) = listener.accept().await {
-                let mut network = network.lock().await;
-                network.handle_new_inbound_connection(addr, raw_sock);
+            while let Ok((raw_sock, _addr)) = listener.accept().await {
+                let hid = host_id.clone();
+                let net = network.clone();
+                tokio::spawn(async move {
+                    rusty_raft::network::handle_new_inbound_connection(net, hid, raw_sock).await;
+                });
             }
         }
     });
 
     //Dial peers we received from orchestrator
-    let peers_to_dial = get_peers(local_addr, orchestrator_url).await?;
-    dial_peers(peers_to_dial, network.clone()).await?;
+    let peers_to_dial = get_peers(host_id.clone(), orchestrator_url).await?;
+    dial_peers(peers_to_dial, host_id, network.clone()).await?;
 
     // TODO: handle incoming requests
     // Some(req) = conn_mgr.incoming_requests() => {
@@ -90,24 +109,24 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn dial_peers(peer_list: Vec<SocketAddr>, network: Arc<Mutex<NetworkManager>>) -> Result<()> {
-    let mut network = network.lock().await;
+async fn dial_peers(
+    peer_list: Vec<PeerId>,
+    host_id: PeerId,
+    network: Arc<Mutex<NetworkManager>>,
+) -> Result<()> {
     for peer in peer_list {
-        if let Err(e) = network.dial_peer(peer).await {
-            tracing::warn!("Failed to dial peer {}: {}", peer, e);
+        if let Err(e) = dial_peer(network.clone(), host_id.clone(), peer.dial_addr.clone()).await {
+            tracing::warn!("Failed to dial addr {}: {}", peer, e);
         }
     }
     tracing::debug!("Finished dialing initial peers");
     Ok(())
 }
 
-async fn get_peers(
-    my_addr: impl Serialize,
-    orchestrator_addr: impl IntoUrl,
-) -> Result<Vec<SocketAddr>> {
-    let addresses: Vec<SocketAddr> = reqwest::Client::new()
+async fn get_peers(host_id: PeerId, orchestrator_addr: impl IntoUrl) -> Result<Vec<PeerId>> {
+    let addresses: Vec<PeerId> = reqwest::Client::new()
         .post(orchestrator_addr)
-        .json(&serde_json::json!( { "address": my_addr } ))
+        .json(&host_id)
         .send()
         .await?
         .json()

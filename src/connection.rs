@@ -35,25 +35,29 @@ use tokio_util::codec::{
 
 use crate::{
     json_rpc::{
-        Message as RpcMessage,
-        Request as RpcRequest,
+        Message,
         RequestId,
-        Response as RpcResponse,
+        RpcMessage,
+        RpcRequest,
+        RpcResponse,
     },
-    peer::PeerId,
+    peer::{
+        PeerId,
+        PeerName,
+    },
     utils::dynamic_fut,
 };
 
 type JsonWriteFrame = SymmetricallyFramed<
     FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>,
-    RpcMessage,
-    SymmetricalJson<RpcMessage>,
+    Message,
+    SymmetricalJson<Message>,
 >;
 
 type JsonReadFrame = SymmetricallyFramed<
     FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
-    RpcMessage,
-    SymmetricalJson<RpcMessage>,
+    Message,
+    SymmetricalJson<Message>,
 >;
 
 /// [`ConnectionHandle`] allows us to send requests from the ConnectionActor to the rest of the
@@ -67,8 +71,14 @@ pub type ResponseHandle = oneshot::Sender<RpcResponse>;
 /// inbound requests/responses into [`JsonRpcMessage`] types and sends outbound requests/responses
 /// to the peer
 pub struct ConnectionActor {
-    /// Socket address of the peer
-    addr: PeerId,
+    /// Server address of this node
+    /// Used for self-identifying to peers in [`Message`]
+    //TODO: Make this static throughout the entire program
+    host_id: PeerId,
+
+    /// Server address of the peer (NOTE this is not the address of this socket)
+    peer_name: PeerName,
+
     /// Write half of connection; Writes JsonRpcMessage types
     write_conn: JsonWriteFrame,
     /// Read half of connection; Read JsonRpcMessage types
@@ -95,7 +105,8 @@ pub struct ConnectionActor {
 impl ConnectionActor {
     /// Creates Read/Write frames for the raw socket and initializes the ConnectionActor
     pub fn new(
-        addr: PeerId,
+        host_id: PeerId,
+        peer_name: PeerName,
         raw_sock: TcpStream,
         outbound_req_alert: mpsc::Receiver<(RpcRequest, ResponseHandle)>,
         inbound_req_handle: ConnectionHandle,
@@ -104,15 +115,16 @@ impl ConnectionActor {
 
         let write_conn: JsonWriteFrame = SymmetricallyFramed::new(
             FramedWrite::new(write_raw, LengthDelimitedCodec::new()),
-            SymmetricalJson::<RpcMessage>::default(),
+            SymmetricalJson::<Message>::default(),
         );
 
         let read_conn = SymmetricallyFramed::new(
             FramedRead::new(read_raw, LengthDelimitedCodec::new()),
-            SymmetricalJson::<RpcMessage>::default(),
+            SymmetricalJson::<Message>::default(),
         );
         Self {
-            addr,
+            host_id,
+            peer_name,
             write_conn,
             read_conn,
             inbound_req_handle,
@@ -142,10 +154,13 @@ impl ConnectionActor {
         match res {
             Ok(resp) => {
                 self.write_conn
-                    .send(RpcMessage::Response(resp))
+                    .send(Message {
+                        rpc: RpcMessage::Response(resp),
+                        peer_name: self.host_id.common_name.clone(),
+                    })
                     .await
                     .unwrap_or_else(|_| {
-                        tracing::error!("Error sending response to peer {}", self.addr);
+                        tracing::error!("Error sending response to peer {}", self.peer_name);
                     });
             }
             Err(_recv_err) => {
@@ -158,14 +173,17 @@ impl ConnectionActor {
         match res {
             Some((req, resp_trigger)) => {
                 let id = req.id;
-                let msg = RpcMessage::Request(req);
+                let msg = Message {
+                    rpc: RpcMessage::Request(req),
+                    peer_name: self.host_id.common_name.clone(),
+                };
 
                 if self.active_outbound_request.is_some() {
-                    tracing::error!("Duplicate request id {} for peer {}", id.0, self.addr);
+                    tracing::error!("Duplicate request id {} for peer {}", id.0, self.peer_name);
                 } else {
                     self.active_outbound_request = Some((id, resp_trigger));
                     self.write_conn.send(msg).await.unwrap_or_else(|_| {
-                        tracing::error!("Error sending request to peer {}", self.addr);
+                        tracing::error!("Error sending request to peer {}", self.peer_name);
                     });
                 }
             }
@@ -173,13 +191,13 @@ impl ConnectionActor {
         }
     }
 
-    async fn handle_inbound_read(&mut self, msg: Result<RpcMessage, impl Error>) {
+    async fn handle_inbound_read(&mut self, msg: Result<Message, impl Error>) {
         match msg {
             Ok(msg) => {
                 self.handle_inbound_message(msg).await;
             }
             Err(e) => {
-                tracing::error!("Error reading from peer {}: {}", self.addr, e);
+                tracing::error!("Error reading from peer {}: {}", self.peer_name, e);
                 todo!(
                     "Unwind, deallocate everything, and probably send a msg up to the \
                      ConnectionManager to let them know to remove"
@@ -188,8 +206,9 @@ impl ConnectionActor {
         }
     }
 
-    async fn handle_inbound_message(&mut self, msg: RpcMessage) {
-        match msg {
+    async fn handle_inbound_message(&mut self, msg: Message) {
+        let Message { rpc, .. } = msg;
+        match rpc {
             RpcMessage::Request(req) => {
                 let (tx, rx) = oneshot::channel();
                 match self.outbound_resp_alert {
@@ -218,7 +237,7 @@ impl ConnectionActor {
                         tracing::error!(
                             "Received response with mismatched id from peer {}: expected {}, got \
                              {}",
-                            self.addr,
+                            self.peer_name,
                             outbound_id.0,
                             resp.id.0,
                         );
@@ -226,7 +245,7 @@ impl ConnectionActor {
                 } else {
                     tracing::error!(
                         "Received unexpected response from peer {}: {}",
-                        self.addr,
+                        self.peer_name,
                         resp.id.0,
                     );
                 }

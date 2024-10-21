@@ -12,22 +12,13 @@ use axum::{
     Router,
 };
 use color_eyre::Result;
-use serde::{
-    Deserialize,
-    Serialize,
-};
+use rusty_raft::peer::PeerId;
 use tokio::sync::Mutex;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-#[derive(Serialize, Deserialize)]
-struct PeerRequest {
-    address: SocketAddr,
-    // address: PeerAddr,
-}
-
 #[derive(Clone, Default)]
-struct AppState(Arc<Mutex<HashSet<SocketAddr>>>);
+struct AppState(Arc<Mutex<HashSet<PeerId>>>);
 
 #[derive(clap::Parser)]
 struct Args {
@@ -63,16 +54,16 @@ async fn main() -> Result<()> {
 
 async fn handle_orchestrator(
     State(state): State<AppState>,
-    Json(req): Json<PeerRequest>,
+    Json(req): Json<PeerId>,
 ) -> impl IntoResponse {
-    info!("Serving peer list to {}", req.address);
+    info!("Serving peer list to {}", req.dial_addr);
     let mut peers = state.0.lock().await;
     let mut addresses = peers.iter().cloned().collect::<Vec<_>>();
 
     // Insert the peer into the list and remove it from the list of it's peers if it ahs already
     // been reprsented in it
-    if !peers.insert(req.address) {
-        addresses.retain(|&addr| addr != req.address);
+    if !peers.insert(req.clone()) {
+        addresses.retain(|pid| *pid != req);
     }
     tracing::debug!("Peers: {:?}", addresses);
     Json(addresses)
