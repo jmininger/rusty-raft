@@ -10,6 +10,7 @@ use rusty_raft::{
         config_from_env,
         Config,
     },
+    network,
     network::{
         dial_peer,
         NetworkManager,
@@ -92,7 +93,7 @@ async fn main() -> Result<()> {
                 let hid = host_id.clone();
                 let net = network.clone();
                 tokio::spawn(async move {
-                    rusty_raft::network::handle_new_inbound_connection(net, hid, raw_sock).await;
+                    network::handle_new_inbound_connection(net, hid, raw_sock).await;
                 });
             }
         }

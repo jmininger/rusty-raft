@@ -13,6 +13,10 @@ fmt:
 doc:
     cargo doc --open
 
+# Run unit tests
+test:
+  cargo test
+
 # Orchestrator command
 orchestrator:
     cargo run --bin orchestrator -- --host $ORCHESTRATOR_ADDR
