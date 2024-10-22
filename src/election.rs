@@ -1,10 +1,9 @@
+use std::time::Duration;
+
 use rand::Rng;
-use tokio::{
-    select,
-    sync::{
-        mpsc,
-        oneshot,
-    },
+use tokio::sync::{
+    mpsc,
+    oneshot,
 };
 use tracing::warn;
 
@@ -16,9 +15,10 @@ async fn election_timeout(
     let mut rng = rand::thread_rng();
     loop {
         let rand_timeout = rng.gen_range(150..300);
-        select! {
-            _ = msg_alert.recv() => (),
-            _ = tokio::time::sleep(std::time::Duration::from_millis(rand_timeout)) => break,
+        if let Err(_) =
+            tokio::time::timeout(Duration::from_millis(rand_timeout), msg_alert.recv()).await
+        {
+            break;
         }
     }
     if election_trigger.send(()).is_err() {
