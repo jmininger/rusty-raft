@@ -1,4 +1,6 @@
 # rusty-raft
+<img src="ferris-raft.jpeg" alt="Ferris the Rust Crab on a Raft" width="300">
+
 
 # Overview
 A very WIP/toy implemenation of the [Raft Consensus Protocol](https://raft.github.io/) in Rust. See the [Raft
@@ -13,7 +15,8 @@ In the raft protocol the set of nodes is fixed and their identities are meant to
 time. I use the `orchestrator` program as a way for nodes in the cluster to discover each other.
 <br>
 <br>
-Make sure env vars are set properly in `.env` . Then, in tmux window 1:
+
+Make sure env vars are set properly in `.env`. Then, in tmux window 1:
 
 ```bash
 just orchestrator
