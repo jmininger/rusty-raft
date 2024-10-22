@@ -184,10 +184,19 @@ pub async fn exchange_identities(
         let name_line = framed.next().await;
         let addr_line = framed.next().await;
         match (name_line, addr_line) {
-            (Some(Ok(name)), Some(Ok(addr))) => Ok(PeerId {
-                common_name: name,
-                dial_addr: addr.parse().unwrap(),
-            }),
+            (Some(Ok(name)), Some(Ok(addr))) => {
+                let addr = match addr.parse() {
+                    Ok(dial_addr) => dial_addr,
+                    Err(e) => {
+                        tracing::debug!("Failed to parse dial address: {}", e);
+                        panic!("Failed to parse dial address");
+                    }
+                };
+                Ok(PeerId {
+                    common_name: name,
+                    dial_addr: addr,
+                })
+            }
             _ => Err("Failed to read peer id"),
         }
     };
