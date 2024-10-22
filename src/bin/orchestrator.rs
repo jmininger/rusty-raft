@@ -60,7 +60,7 @@ async fn handle_orchestrator(
     let mut peers = state.0.lock().await;
     let mut addresses = peers.iter().cloned().collect::<Vec<_>>();
 
-    // Insert the peer into the list and remove it from the list of it's peers if it ahs already
+    // Insert the peer into the list and remove it from the list of it's peers if it has already
     // been reprsented in it
     if !peers.insert(req.clone()) {
         addresses.retain(|pid| *pid != req);

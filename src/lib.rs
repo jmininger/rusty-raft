@@ -1,3 +1,4 @@
+pub mod config;
 pub mod connection;
 pub mod election;
 pub mod json_rpc;
