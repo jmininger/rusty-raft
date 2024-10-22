@@ -35,8 +35,10 @@ async fn dial_peers(
     for peer in peer_list {
         let dial_fut = dial_peer(network.clone(), host_id.clone(), peer.dial_addr.clone());
         tokio::select! {
-            Err(e) = dial_fut => {
-                tracing::warn!("Failed to dial addr {}: {}", peer, e);
+            res = dial_fut => {
+                if let Err(e) = res {
+                    tracing::warn!("Failed to dial addr {}: {}", peer, e);
+                }
             },
             _ = tokio::time::sleep(timeout) => {
                 tracing::warn!("Dial of addr {} timed-out", peer);
@@ -73,12 +75,14 @@ async fn main() -> Result<()> {
         node_id,
     } = config_from_env()?;
 
-    let orchestrator_url = Url::parse(&format!("http://{}/", orchestrator_addr))?;
-
     let host_id = PeerId {
         dial_addr: local_addr,
         common_name: format!("node-{}", node_id),
     };
+
+    let orchestrator_url = orchestrator_addr.map(|addr| {
+        Url::parse(&format!("http://{}/", addr)).expect("Failed to parse orchestrator url")
+    });
 
     tracing::info!(
         "Starting node {} with config: {}",
@@ -108,16 +112,19 @@ async fn main() -> Result<()> {
         }
     });
 
-    //Dial peers we received from orchestrator
-    let peers_to_dial = bootstrap_peer_list(host_id.clone(), orchestrator_url).await?;
-    let dial_timeout = Duration::from_secs(2);
-    dial_peers(
-        peers_to_dial,
-        host_id.clone(),
-        Arc::clone(&network),
-        dial_timeout,
-    )
-    .await?;
+    // If an orchestrator_addr was passed into the config, contact it and get a list of peers to
+    // dial
+    if let Some(orchestrator_url) = orchestrator_url {
+        let peers_to_dial = bootstrap_peer_list(host_id.clone(), orchestrator_url).await?;
+        let dial_timeout = Duration::from_secs(2);
+        dial_peers(
+            peers_to_dial,
+            host_id.clone(),
+            Arc::clone(&network),
+            dial_timeout,
+        )
+        .await?;
+    }
 
     // TODO: handle incoming requests
     // Some(req) = conn_mgr.incoming_requests() => {
