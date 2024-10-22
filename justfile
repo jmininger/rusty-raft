@@ -26,6 +26,5 @@ orchestrator:
 #         alacritty -e zsh -c cmd; \
 #     done
 
-run-node port:
-    LOCAL_ADDR="127.0.0.1:{{port}}" cargo run --bin raft
-    echo {{port}}
+run-node id:
+    LOCAL_ADDR="127.0.0.1:"$(( $BASE_PORT + {{id}} ))"" NODE_ID="{{id}}" cargo run --bin raft
