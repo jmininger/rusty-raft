@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::Duration,
+};
 
 use color_eyre::Result;
 use reqwest::{
@@ -27,10 +30,17 @@ async fn dial_peers(
     peer_list: Vec<PeerId>,
     host_id: PeerId,
     network: Arc<Mutex<NetworkManager>>,
+    timeout: Duration,
 ) -> Result<()> {
     for peer in peer_list {
-        if let Err(e) = dial_peer(network.clone(), host_id.clone(), peer.dial_addr.clone()).await {
-            tracing::warn!("Failed to dial addr {}: {}", peer, e);
+        let dial_fut = dial_peer(network.clone(), host_id.clone(), peer.dial_addr.clone());
+        tokio::select! {
+            Err(e) = dial_fut => {
+                tracing::warn!("Failed to dial addr {}: {}", peer, e);
+            },
+            _ = tokio::time::sleep(timeout) => {
+                tracing::warn!("Dial of addr {} timed-out", peer);
+            }
         }
     }
     tracing::debug!("Finished dialing initial peers");
@@ -56,6 +66,7 @@ async fn main() -> Result<()> {
     let filter = EnvFilter::from_default_env();
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    // Load in config from ENV
     let conf @ Config {
         orchestrator_addr,
         local_addr,
@@ -75,13 +86,15 @@ async fn main() -> Result<()> {
         conf
     );
 
+    // Setup application state
     let network: Arc<Mutex<NetworkManager>> =
         Arc::new(Mutex::new(NetworkManager::new(host_id.clone())));
 
+    //todo: ew
     let host_id_clone = host_id.clone();
     let network_clone = network.clone();
 
-    // Start listener for new tcp connections
+    // Start listener for new tcp connections so that other nodes can dial the host
     let server_handle = tokio::spawn({
         let host_id = host_id_clone;
         let network = network_clone;
@@ -101,7 +114,8 @@ async fn main() -> Result<()> {
 
     //Dial peers we received from orchestrator
     let peers_to_dial = bootstrap_peer_list(host_id.clone(), orchestrator_url).await?;
-    dial_peers(peers_to_dial, host_id, network.clone()).await?;
+    let dial_timeout = Duration::from_secs(2);
+    dial_peers(peers_to_dial, host_id, network.clone(), dial_timeout).await?;
 
     // TODO: handle incoming requests
     // Some(req) = conn_mgr.incoming_requests() => {
