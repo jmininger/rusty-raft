@@ -90,21 +90,17 @@ async fn main() -> Result<()> {
     let network: Arc<Mutex<NetworkManager>> =
         Arc::new(Mutex::new(NetworkManager::new(host_id.clone())));
 
-    //todo: ew
-    let host_id_clone = host_id.clone();
-    let network_clone = network.clone();
-
     // Start listener for new tcp connections so that other nodes can dial the host
     let server_handle = tokio::spawn({
-        let host_id = host_id_clone;
-        let network = network_clone;
+        let host_id = host_id.clone();
+        let network = Arc::clone(&network);
         async move {
             let listener = TcpListener::bind(host_id.dial_addr)
                 .await
                 .expect("Failed to bind to local address");
             while let Ok((raw_sock, _addr)) = listener.accept().await {
                 let hid = host_id.clone();
-                let net = network.clone();
+                let net = Arc::clone(&network);
                 tokio::spawn(async move {
                     network::handle_new_inbound_connection(net, hid, raw_sock).await;
                 });
@@ -115,7 +111,13 @@ async fn main() -> Result<()> {
     //Dial peers we received from orchestrator
     let peers_to_dial = bootstrap_peer_list(host_id.clone(), orchestrator_url).await?;
     let dial_timeout = Duration::from_secs(2);
-    dial_peers(peers_to_dial, host_id, network.clone(), dial_timeout).await?;
+    dial_peers(
+        peers_to_dial,
+        host_id.clone(),
+        Arc::clone(&network),
+        dial_timeout,
+    )
+    .await?;
 
     // TODO: handle incoming requests
     // Some(req) = conn_mgr.incoming_requests() => {
