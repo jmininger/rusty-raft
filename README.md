@@ -1,10 +1,10 @@
 # rusty-raft
 
-## Overview
+# Overview
 A very WIP/toy implemenation of the [Raft Consensus Protocol](https://raft.github.io/) in Rust. See the [Raft
 paper](https://raft.github.io/raft.pdf) for more information.
 
-## Running
+# Running
 This project uses the [just command runner](https://github.com/casey/just) to make running various
 tasks easier.
 
@@ -24,7 +24,14 @@ In three separate tmux windows run the following command, making sure to replace
 just run-node $N
 ```
 
-## Architecture
+# Architecture
+## Identity protocol
+Upon creating a new socket, both nodes expect the following behavior before receiving/sending
+protocol messages:
+- Over the tcp socket send two lines:
+    - `COMMON_NAME`
+    - `DIAL_ADDRESS`
+- Then read the equivalent two lines from the other side
 
 ### NetworkManager and ConnectionActor
 - In a prod system I probably would have used a network protocol with a req/resp workflow baked in
