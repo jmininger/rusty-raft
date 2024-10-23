@@ -13,6 +13,7 @@ def dial_peer(peer_addr):
     sock = socket(AF_INET, SOCK_STREAM)
     sock.connect(peer_addr)
     exchange_identity(sock)
+    print("Connected to peer", peer_addr)
     n = 0
     while True:
         n += 1
@@ -34,10 +35,8 @@ def exchange_identity(sock):
     (addr, port) = sock.getsockname()
     msg = addr + ":" + str(port) + "\r\n"
     sock.sendall(msg.encode())
-    chunk1 = sock.recv(1024)
-    print(chunk1)
-    chunk2 = sock.recv(1024)
-    print(chunk2)
+    [name, addr] = read_lines_from_socket(sock, 2)
+    print("Received identity from peer", name, addr)
 
 
 def send_length_prefixed_message(sock, message):
@@ -49,3 +48,22 @@ def send_length_prefixed_message(sock, message):
     print("Message:", length_prefix + json_bytes)
     # Send the length prefix and the message
     sock.sendall(length_prefix + json_bytes)
+
+
+def read_lines_from_socket(sock, n):
+    received_data = ""
+    line_breaks = 0
+    lines = []
+    while line_breaks < n:
+        data = sock.recv(1024).decode('utf-8')  # Read a chunk of data from the socket
+        if not data:
+            break  # Connection closed by the client
+        received_data += data
+        partial_lines = received_data.split('\n')
+        lines.extend(partial_lines[:-1])
+        line_breaks += len(partial_lines) - 1
+        received_data = partial_lines[-1]
+        print("Received ", len(partial_lines) - 1, "lines")
+    if received_data:
+        lines.append(received_data)
+    return lines
