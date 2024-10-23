@@ -4,7 +4,6 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    sync::Arc,
     time::Duration,
 };
 
@@ -15,7 +14,6 @@ use tokio::{
     sync::{
         mpsc,
         oneshot,
-        Mutex,
     },
     task::JoinSet,
 };
@@ -212,7 +210,7 @@ pub async fn exchange_identities(
 }
 
 pub async fn dial_peer(
-    network: Arc<Mutex<NetworkManager>>,
+    network: &mut NetworkManager,
     host_id: PeerId,
     peer_addr: SocketAddr,
 ) -> Result<()> {
@@ -222,19 +220,19 @@ pub async fn dial_peer(
 
     tracing::debug!("Exchanged identity to peer {}", peer_id,);
 
-    network.lock().await.add_new_peer(&peer_id, raw_sock);
+    network.add_new_peer(&peer_id, raw_sock);
     tracing::info!("Sucessfully dialed peer {}", peer_id);
     Ok(())
 }
 
 pub async fn handle_new_inbound_connection(
-    network: Arc<Mutex<NetworkManager>>,
+    network: &mut NetworkManager,
     host_id: PeerId,
     raw_sock: TcpStream,
 ) {
     let (raw_sock, peer_id) = exchange_identities(host_id, raw_sock).await.unwrap();
     tracing::info!("Received new inbound connection from {}", peer_id);
-    network.lock().await.add_new_peer(&peer_id, raw_sock);
+    network.add_new_peer(&peer_id, raw_sock);
     tracing::debug!("Added new connection to peer {}", peer_id);
 }
 
@@ -258,7 +256,7 @@ mod tests {
             let server = TcpListener::bind(server_addr).await.unwrap();
             let (raw_sock, _addr) = server.accept().await.unwrap();
             let (_raw_sock, client_id) = exchange_identities(host_id, raw_sock).await.unwrap();
-            return client_id;
+            client_id
         });
         let dialer_handle = tokio::spawn(async move {
             let host_id = PeerId {
@@ -267,7 +265,7 @@ mod tests {
             };
             let raw_sock = TcpStream::connect(server_addr).await.unwrap();
             let (_raw_sock, server_id) = exchange_identities(host_id, raw_sock).await.unwrap();
-            return server_id;
+            server_id
         });
 
         let (server_res, dialer_res) = tokio::join!(server_handle, dialer_handle);

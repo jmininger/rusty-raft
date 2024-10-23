@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::Duration,
-};
+use std::time::Duration;
 
 use color_eyre::Result;
 use reqwest::{
@@ -21,47 +18,13 @@ use rusty_raft::{
     peer::PeerId,
 };
 use tokio::{
-    net::TcpListener,
-    sync::Mutex,
+    net::{
+        TcpListener,
+        TcpStream,
+    },
+    sync::mpsc,
 };
 use tracing_subscriber::EnvFilter;
-
-async fn dial_peers(
-    peer_list: Vec<PeerId>,
-    host_id: PeerId,
-    network: Arc<Mutex<NetworkManager>>,
-    timeout: Duration,
-) -> Result<()> {
-    for peer in peer_list {
-        let dial_fut = dial_peer(network.clone(), host_id.clone(), peer.dial_addr.clone());
-        tokio::select! {
-            res = dial_fut => {
-                if let Err(e) = res {
-                    tracing::warn!("Failed to dial addr {}: {}", peer, e);
-                }
-            },
-            _ = tokio::time::sleep(timeout) => {
-                tracing::warn!("Dial of addr {} timed-out", peer);
-            }
-        }
-    }
-    tracing::debug!("Finished dialing initial peers");
-    Ok(())
-}
-
-async fn bootstrap_peer_list(
-    host_id: PeerId,
-    orchestrator_addr: impl IntoUrl,
-) -> Result<Vec<PeerId>> {
-    let addresses: Vec<PeerId> = reqwest::Client::new()
-        .post(orchestrator_addr)
-        .json(&host_id)
-        .send()
-        .await?
-        .json()
-        .await?;
-    Ok(addresses)
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -91,44 +54,101 @@ async fn main() -> Result<()> {
     );
 
     // Setup application state
-    let network: Arc<Mutex<NetworkManager>> =
-        Arc::new(Mutex::new(NetworkManager::new(host_id.clone())));
+    let mut network = NetworkManager::new(host_id.clone());
 
-    // Start listener for new tcp connections so that other nodes can dial the host
-    let server_handle = tokio::spawn({
-        let host_id = host_id.clone();
-        let network = Arc::clone(&network);
-        async move {
-            let listener = TcpListener::bind(host_id.dial_addr)
-                .await
-                .expect("Failed to bind to local address");
-            while let Ok((raw_sock, _addr)) = listener.accept().await {
-                let hid = host_id.clone();
-                let net = Arc::clone(&network);
-                tokio::spawn(async move {
-                    network::handle_new_inbound_connection(net, hid, raw_sock).await;
-                });
-            }
-        }
-    });
+    // Run the server and forward new connections to the event loop for processing
+    let (new_conn_trigger, mut new_conn_alert) = mpsc::channel(100);
+    tokio::spawn(run_server(host_id.clone(), new_conn_trigger));
 
     // If an orchestrator_addr was passed into the config, contact it and get a list of peers to
     // dial
     if let Some(orchestrator_url) = orchestrator_url {
-        let peers_to_dial = bootstrap_peer_list(host_id.clone(), orchestrator_url).await?;
-        let dial_timeout = Duration::from_secs(2);
-        dial_peers(
-            peers_to_dial,
+        if let Err(e) = bootstrap_peers_timeout(
             host_id.clone(),
-            Arc::clone(&network),
-            dial_timeout,
+            orchestrator_url,
+            &mut network,
+            Duration::from_secs(2),
         )
-        .await?;
+        .await
+        {
+            tracing::warn!("Failed to bootstrap peers: {}", e);
+        }
     }
 
-    // TODO: handle incoming requests
-    // Some(req) = conn_mgr.incoming_requests() => {
+    loop {
+        tokio::select! {
+            Some(raw_sock) = new_conn_alert.recv() => {
+                let hid = host_id.clone();
+                network::handle_new_inbound_connection(&mut network, hid, raw_sock).await;
+            },
+            Some((peer, (req, resp_trigger))) = network.incoming_requests() => {
+                tracing::info!("Received request from peer: {}", peer);
+                // let resp = network::handle_request(req).await;
+                // network.send_response(peer, resp).await;
+            },
+        }
+    }
 
-    server_handle.await?;
+    // server_handle.await?;
+    // Ok(())
+}
+
+async fn run_server(host_id: PeerId, new_conn_trigger: mpsc::Sender<TcpStream>) {
+    let listener = TcpListener::bind(host_id.dial_addr)
+        .await
+        .expect("Failed to bind to local address");
+    while let Ok((raw_sock, _addr)) = listener.accept().await {
+        new_conn_trigger
+            .send(raw_sock)
+            .await
+            .expect("Failed to send new connection");
+    }
+}
+
+async fn dial_peers(
+    peer_list: Vec<PeerId>,
+    host_id: PeerId,
+    network: &mut NetworkManager,
+    timeout: Duration,
+) -> Result<()> {
+    for peer in peer_list {
+        let dial_fut = dial_peer(network, host_id.clone(), peer.dial_addr);
+        tokio::select! {
+            res = dial_fut => {
+                if let Err(e) = res {
+                    tracing::warn!("Failed to dial addr {}: {}", peer, e);
+                }
+            },
+            _ = tokio::time::sleep(timeout) => {
+                tracing::warn!("Dial of addr {} timed-out", peer);
+            }
+        }
+    }
+    tracing::debug!("Finished dialing initial peers");
+    Ok(())
+}
+
+async fn bootstrap_peer_list(
+    host_id: PeerId,
+    orchestrator_addr: impl IntoUrl,
+) -> Result<Vec<PeerId>> {
+    let addresses: Vec<PeerId> = reqwest::Client::new()
+        .post(orchestrator_addr)
+        .json(&host_id)
+        .send()
+        .await?
+        .json()
+        .await?;
+    Ok(addresses)
+}
+
+async fn bootstrap_peers_timeout(
+    host_id: PeerId,
+    orchestrator_addr: impl IntoUrl,
+    network: &mut NetworkManager,
+    dial_timeout: Duration,
+) -> Result<()> {
+    let peers_to_dial = bootstrap_peer_list(host_id.clone(), orchestrator_addr).await?;
+    dial_peers(peers_to_dial, host_id.clone(), network, dial_timeout).await?;
     Ok(())
 }
