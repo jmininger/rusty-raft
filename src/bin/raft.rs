@@ -10,8 +10,13 @@ use rusty_raft::{
         config_from_env,
         Config,
     },
-    network,
+    json_rpc::{
+        Message,
+        RpcMessage,
+        RpcResponse,
+    },
     network::{
+        self,
         dial_peer,
         NetworkManager,
     },
@@ -76,15 +81,18 @@ async fn main() -> Result<()> {
     }
 
     loop {
+        tracing::info!("Waiting for new connection or incoming request");
         tokio::select! {
             Some(raw_sock) = new_conn_alert.recv() => {
                 let hid = host_id.clone();
                 network::handle_new_inbound_connection(&mut network, hid, raw_sock).await;
             },
             Some((peer, (req, resp_trigger))) = network.incoming_requests() => {
-                tracing::info!("Received request from peer: {}", peer);
-                // let resp = network::handle_request(req).await;
-                // network.send_response(peer, resp).await;
+                tracing::info!("Received request {:?} from peer: {}", req, peer);
+                let res = resp_trigger.send(RpcResponse { id: req.id, result: serde_json::json!{"received your request" }});
+                if let Err(e) = res {
+                    tracing::warn!("Failed to send response to peer: {:?}", e);
+                }
             },
         }
     }
