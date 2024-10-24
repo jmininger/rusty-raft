@@ -1,11 +1,6 @@
 use std::collections::HashMap;
 
-use crate::rpc::{
-    LogEntry,
-    LogIndex,
-    PeerName,
-    TermId,
-};
+use crate::peer::PeerName;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LeaderState {
@@ -25,7 +20,13 @@ pub struct RaftState {
     commit_index: LogIndex,
     last_applied: LogIndex,
     node_type: ServerType,
-    current_term: TermId,
-    log: Log,
+    current_term: Term,
+    // log: Log,
     // committed: Log,
 }
+
+pub type LogEntry = String;
+
+pub type LogIndex = usize;
+
+pub type Term = u64;
