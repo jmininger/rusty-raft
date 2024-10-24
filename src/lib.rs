@@ -4,6 +4,7 @@ pub mod election;
 pub mod json_rpc;
 pub mod network;
 pub mod peer;
+pub mod raft_core;
 pub mod raft_rpc;
 pub mod raft_state;
 pub mod utils;

@@ -5,7 +5,7 @@ use serde::{
 
 use crate::{
     peer::PeerName,
-    raft_state::{
+    raft_core::{
         LogEntry,
         LogIndex,
         Term,
