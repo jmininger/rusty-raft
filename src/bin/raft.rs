@@ -10,11 +10,7 @@ use rusty_raft::{
         config_from_env,
         Config,
     },
-    json_rpc::{
-        Message,
-        RpcMessage,
-        RpcResponse,
-    },
+    json_rpc::RpcResponse,
     network::{
         self,
         dial_peer,
@@ -59,7 +55,8 @@ async fn main() -> Result<()> {
     );
 
     // Setup application state
-    let mut network = NetworkManager::new(host_id.clone());
+    let (req_trigger, mut req_alert) = mpsc::channel(100);
+    let mut network = NetworkManager::new(host_id.clone(), req_trigger);
 
     // Run the server and forward new connections to the event loop for processing
     let (new_conn_trigger, mut new_conn_alert) = mpsc::channel(100);
@@ -87,7 +84,7 @@ async fn main() -> Result<()> {
                 let hid = host_id.clone();
                 network::handle_new_inbound_connection(&mut network, hid, raw_sock).await;
             },
-            Some((peer, (req, resp_trigger))) = network.incoming_requests() => {
+            Some((peer, (req, resp_trigger))) = req_alert.recv() => {
                 tracing::info!("Received request {:?} from peer: {}", req, peer);
                 let res = resp_trigger.send(RpcResponse { id: req.id, result: serde_json::json!{"received your request" }});
                 if let Err(e) = res {

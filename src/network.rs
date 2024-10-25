@@ -11,17 +11,10 @@ use color_eyre::Result;
 use futures::SinkExt;
 use tokio::{
     net::TcpStream,
-    sync::{
-        mpsc,
-        oneshot,
-    },
-    task::JoinSet,
+    sync::mpsc,
+    task::AbortHandle,
 };
-use tokio_stream::{
-    wrappers::ReceiverStream,
-    StreamExt,
-    StreamMap,
-};
+use tokio_stream::StreamExt;
 use tokio_util::codec::{
     Framed,
     LinesCodec,
@@ -31,142 +24,131 @@ use crate::{
     connection::{
         ConnectionActor,
         ConnectionHandle,
+        RequestTrigger,
     },
-    peer::PeerId,
-};
-use crate::{
-    json_rpc::{
-        RpcRequest,
-        // RequestId,
-        RpcResponse,
+    peer::{
+        PeerId,
+        PeerName,
     },
-    peer::PeerName,
 };
 
-// async fn run_it_all() {
-//     let mut conn_mgr = NetworkManager::new();
-//     let local_addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
-//     let listener = TcpListener::bind(local_addr).await.unwrap();
-//     loop {
-//         tokio::select! {
-
-//             Ok((raw_sock, addr)) = listener.accept() => {
-//                 conn_mgr.handle_new_connection(addr, raw_sock);
-//                 todo!();
-//             },
-//             Some(req) = conn_mgr.incoming_requests() => {
-//                 todo!();
-//             },
-//         }
-//     }
-// }
-
-/// Stream of inbound RpcRequests from a peer, with a oneshot channel to send the response
-type InboundReqListener = ReceiverStream<(RpcRequest, oneshot::Sender<RpcResponse>)>;
+struct Connection {
+    pub peer_id: PeerId,
+    pub handle: ConnectionHandle,
+    pub abort_trigger: AbortHandle,
+}
 
 pub struct NetworkManager {
     host_id: PeerId,
-    /// Read handles, multiplexed together into a single event stream via the StreamMap
-    connection_map: StreamMap<PeerName, InboundReqListener>,
     /// Write handles to connections
-    connection_handles: HashMap<PeerName, ConnectionHandle>,
-
-    peer_list: Vec<PeerId>,
+    connection_handles: HashMap<PeerName, Connection>,
+    /// Write handles for connections to send request upstream to the app so that the app can
+    /// manage them
+    request_trigger: RequestTrigger,
 }
 
 impl NetworkManager {
-    pub fn new(host_id: PeerId) -> Self {
+    pub fn new(host_id: PeerId, request_trigger: RequestTrigger) -> Self {
         Self {
             host_id,
-            connection_map: StreamMap::new(),
+            request_trigger,
             connection_handles: HashMap::new(),
-            peer_list: Vec::new(),
         }
     }
 
     pub fn list_connections(&self) -> Vec<PeerId> {
-        //note: this assumes that connection_map and connection_handles should always have the same
-        //keys and are in sync
-        self.peer_list.clone()
+        self.connection_handles
+            .values()
+            .map(|c| c.peer_id.clone())
+            .collect()
     }
 
-    pub async fn broadcast(
-        &mut self,
-        msg: RpcRequest,
-        timeout_ms: Duration,
-    ) -> Vec<(PeerName, Option<RpcResponse>)> {
-        let mut responses = JoinSet::new();
-        for (peer, conn) in self.connection_handles.iter() {
-            let (send_resp, res_alert) = oneshot::channel();
-            if let Err(send_err) = conn.send((msg.clone(), send_resp)).await {
-                tracing::error!("Error sending request to connection manager: {}", send_err);
-            }
-            let peer = peer.clone();
-            responses.spawn(async move {
-                (
-                    peer.clone(),
-                    tokio::select! {
-                        res = res_alert => res.map_err(|e| {
-                            tracing::error!("Error with peer: {}: {}", peer, e);
-                        }).ok(),
-                        _ = tokio::time::sleep(timeout_ms) => {
-                            tracing::warn!("Timed out waiting for response from peer {}", peer);
-                            None
-                        }
-                    },
-                )
-            });
-        }
-        responses.join_all().await
-    }
-
-    /// Multiplex incoming requests from all connections into a single Stream
-    /// Returns None if there are no more connections
-    pub async fn incoming_requests(
-        &mut self,
-    ) -> Option<(PeerName, (RpcRequest, oneshot::Sender<RpcResponse>))> {
-        self.connection_map.next().await
-    }
+    // pub async fn broadcast(
+    //     &mut self,
+    //     msg: RpcRequest,
+    //     timeout_ms: Duration,
+    // ) -> Vec<(PeerName, Option<RpcResponse>)> {
+    //     let mut responses = JoinSet::new();
+    //     for (peer, conn) in self.connection_handles.iter() {
+    //         let (send_resp, res_alert) = oneshot::channel();
+    //         if let Err(send_err) = conn.send((msg.clone(), send_resp)).await {
+    //             tracing::error!("Error sending request to connection manager: {}", send_err);
+    //         }
+    //         let peer = peer.clone();
+    //         responses.spawn(async move {
+    //             (
+    //                 peer.clone(),
+    //                 tokio::select! {
+    //                     res = res_alert => res.map_err(|e| {
+    //                         tracing::error!("Error with peer: {}: {}", peer, e);
+    //                     }).ok(),
+    //                     _ = tokio::time::sleep(timeout_ms) => {
+    //                         tracing::warn!("Timed out waiting for response from peer {}", peer);
+    //                         None
+    //                     }
+    //                 },
+    //             )
+    //         });
+    //     }
+    //     responses.join_all().await
+    // }
 
     pub fn remove_connection(&mut self, peer: PeerName) {
-        self.connection_map.remove(&peer);
         self.connection_handles.remove(&peer);
+        //todo rm from peer list as well
     }
 
     /// Takes a new socket connection and spins up a new ConnectionActor to manage it
     pub fn add_new_peer(&mut self, peer_id: &PeerId, raw_sock: TcpStream) {
-        let peer = peer_id.common_name.clone();
         let (outbound_req_handle, outbound_req_alert) = mpsc::channel(32);
-        let (inbound_req_handle, inbound_req_alert) = mpsc::channel(32);
+        let inbound_req_handle = self.request_trigger.clone();
+        let host_id = self.host_id.clone();
+        let peer_name = peer_id.common_name.clone();
 
-        let actor = ConnectionActor::new(
-            self.host_id.clone(),
-            peer_id.common_name.clone(),
-            raw_sock,
-            outbound_req_alert,
-            inbound_req_handle,
+        // Spawn a new connection actor to manage the connection
+        let join_handle = tokio::spawn(async move {
+            ConnectionActor::new(
+                host_id,
+                peer_name,
+                raw_sock,
+                outbound_req_alert,
+                inbound_req_handle,
+            )
+            .run()
+            .await
+        });
+
+        self.add_connection(
+            peer_id.clone(),
+            outbound_req_handle,
+            join_handle.abort_handle(),
+        );
+    }
+
+    fn add_connection(
+        &mut self,
+        peer_id: PeerId,
+        handle: ConnectionHandle,
+        abort_trigger: AbortHandle,
+    ) {
+        let peer_name = peer_id.common_name.clone();
+        let prev_conn = self.connection_handles.insert(
+            peer_name.clone(),
+            Connection {
+                peer_id: peer_id.clone(),
+                handle,
+                abort_trigger,
+            },
         );
 
-        // Add both the read/write handles to the network
-        let prev_conn = self
-            .connection_map
-            .insert(peer.clone(), ReceiverStream::new(inbound_req_alert));
-
-        if prev_conn.is_some() {
+        if let Some(conn) = prev_conn {
             tracing::warn!(
                 "Connection already exists for peer {}; Replacing it with new one",
-                peer
+                peer_name
             );
+            conn.abort_trigger.abort();
         }
-
-        // Insert into `connection_handles` regardless of whether the key was present
-        self.connection_handles.insert(peer, outbound_req_handle);
-        self.peer_list.push(peer_id.clone());
-
         tracing::info!("Added new connection from peer {} to network", peer_id);
-
-        // Manage the actor in the background
-        tokio::spawn(async move { actor.run().await });
     }
 }
 

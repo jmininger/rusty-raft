@@ -64,6 +64,8 @@ type JsonReadFrame = SymmetricallyFramed<
 /// application
 pub type ConnectionHandle = mpsc::Sender<(RpcRequest, ResponseHandle)>;
 
+pub type RequestTrigger = mpsc::Sender<(PeerName, (RpcRequest, ResponseHandle))>;
+
 /// [`ResponseHandle`] allows us to send responses back to the peer/app
 pub type ResponseHandle = oneshot::Sender<RpcResponse>;
 
@@ -85,7 +87,7 @@ pub struct ConnectionActor {
     read_conn: JsonReadFrame,
 
     /// Used to send inbound requests to the application
-    inbound_req_handle: ConnectionHandle,
+    inbound_req_handle: RequestTrigger,
 
     /// Used to listen for responses to requests that the application is servicing
     outbound_resp_alert: Option<oneshot::Receiver<RpcResponse>>,
@@ -109,7 +111,7 @@ impl ConnectionActor {
         peer_name: PeerName,
         raw_sock: TcpStream,
         outbound_req_alert: mpsc::Receiver<(RpcRequest, ResponseHandle)>,
-        inbound_req_handle: ConnectionHandle,
+        inbound_req_handle: RequestTrigger,
     ) -> Self {
         let (read_raw, write_raw) = raw_sock.into_split();
 
@@ -220,7 +222,7 @@ impl ConnectionActor {
                     None => {
                         self.outbound_resp_alert = Some(rx);
                         self.inbound_req_handle
-                            .send((req, tx))
+                            .send((self.peer_name.clone(), (req, tx)))
                             .await
                             .expect("Inbound request handler dropped before response sent");
                     }
