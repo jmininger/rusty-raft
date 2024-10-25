@@ -11,8 +11,14 @@ use color_eyre::Result;
 use futures::SinkExt;
 use tokio::{
     net::TcpStream,
-    sync::mpsc,
-    task::AbortHandle,
+    sync::{
+        mpsc,
+        oneshot,
+    },
+    task::{
+        AbortHandle,
+        JoinSet,
+    },
 };
 use tokio_stream::StreamExt;
 use tokio_util::codec::{
@@ -25,6 +31,10 @@ use crate::{
         ConnectionActor,
         ConnectionHandle,
         RequestTrigger,
+    },
+    json_rpc::{
+        RpcRequest,
+        RpcResponse,
     },
     peer::{
         PeerId,
@@ -63,39 +73,38 @@ impl NetworkManager {
             .collect()
     }
 
-    // pub async fn broadcast(
-    //     &mut self,
-    //     msg: RpcRequest,
-    //     timeout_ms: Duration,
-    // ) -> Vec<(PeerName, Option<RpcResponse>)> {
-    //     let mut responses = JoinSet::new();
-    //     for (peer, conn) in self.connection_handles.iter() {
-    //         let (send_resp, res_alert) = oneshot::channel();
-    //         if let Err(send_err) = conn.send((msg.clone(), send_resp)).await {
-    //             tracing::error!("Error sending request to connection manager: {}", send_err);
-    //         }
-    //         let peer = peer.clone();
-    //         responses.spawn(async move {
-    //             (
-    //                 peer.clone(),
-    //                 tokio::select! {
-    //                     res = res_alert => res.map_err(|e| {
-    //                         tracing::error!("Error with peer: {}: {}", peer, e);
-    //                     }).ok(),
-    //                     _ = tokio::time::sleep(timeout_ms) => {
-    //                         tracing::warn!("Timed out waiting for response from peer {}", peer);
-    //                         None
-    //                     }
-    //                 },
-    //             )
-    //         });
-    //     }
-    //     responses.join_all().await
-    // }
+    pub async fn broadcast(
+        &mut self,
+        msg: RpcRequest,
+        timeout_ms: Duration,
+    ) -> JoinSet<(PeerName, Option<RpcResponse>)> {
+        let mut responses = JoinSet::new();
+        for (peer, conn) in self.connection_handles.iter() {
+            let (response_trigger, res_alert) = oneshot::channel();
+            if let Err(send_err) = conn.handle.send((msg.clone(), response_trigger)).await {
+                tracing::error!("Error sending request to connection manager: {}", send_err);
+            }
+            let peer = peer.clone();
+            responses.spawn(async move {
+                (
+                    peer.clone(),
+                    tokio::select! {
+                        res = res_alert => res.map_err(|e| {
+                            tracing::error!("Error with peer: {}: {}", peer, e);
+                        }).ok(),
+                        _ = tokio::time::sleep(timeout_ms) => {
+                            tracing::warn!("Timed out waiting for response from peer {}", peer);
+                            None
+                        }
+                    },
+                )
+            });
+        }
+        responses
+    }
 
     pub fn remove_connection(&mut self, peer: PeerName) {
         self.connection_handles.remove(&peer);
-        //todo rm from peer list as well
     }
 
     /// Takes a new socket connection and spins up a new ConnectionActor to manage it
