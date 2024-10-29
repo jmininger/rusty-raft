@@ -64,9 +64,11 @@ type JsonReadFrame = SymmetricallyFramed<
 /// application
 pub type ConnectionHandle = mpsc::Sender<(RpcRequest, ResponseHandle)>;
 
+/// [`RequestTrigger`] is used to send inbound requests to the application's event loop
 pub type RequestTrigger = mpsc::Sender<(PeerName, (RpcRequest, ResponseHandle))>;
 
-/// [`ResponseHandle`] allows us to send responses back to the peer/app
+/// [`ResponseHandle`] sends responses to outbound requests back upwards to the application that
+/// triggered the request
 pub type ResponseHandle = oneshot::Sender<RpcResponse>;
 
 /// [`ConnectionActor`] is responsible for handling the connection to a single peer. It parses
@@ -99,7 +101,7 @@ pub struct ConnectionActor {
     /// responded to
     active_outbound_request: Option<(RequestId, ResponseHandle)>,
 
-    ///TODO: Not currently used anywhere
+    //TODO: Not currently used anywhere
     _request_id: u64,
     // request_id: RequestId,
 }
@@ -145,14 +147,14 @@ impl ConnectionActor {
         loop {
             let outbound_resp_alert = dynamic_fut(self.outbound_resp_alert.take());
             tokio::select! {
-                res = outbound_resp_alert => self.handle_outbound_response(res).await,
-                res = self.outbound_req_alert.recv() => self.handle_outbound_request(res).await,
+                res = outbound_resp_alert => self.send_response(res).await,
+                res = self.outbound_req_alert.recv() => self.send_request(res).await,
                 Some(msg) = self.read_conn.next() => self.handle_inbound_read(msg).await,
             }
         }
     }
 
-    async fn handle_outbound_response(&mut self, res: Result<RpcResponse, impl Error>) {
+    async fn send_response(&mut self, res: Result<RpcResponse, impl Error>) {
         match res {
             Ok(resp) => {
                 self.write_conn
@@ -171,7 +173,7 @@ impl ConnectionActor {
         }
     }
 
-    async fn handle_outbound_request(&mut self, res: Option<(RpcRequest, ResponseHandle)>) {
+    async fn send_request(&mut self, res: Option<(RpcRequest, ResponseHandle)>) {
         match res {
             Some((req, resp_trigger)) => {
                 let id = req.id;
@@ -196,7 +198,7 @@ impl ConnectionActor {
     async fn handle_inbound_read(&mut self, msg: Result<Message, impl Error>) {
         match msg {
             Ok(msg) => {
-                self.handle_inbound_message(msg).await;
+                self.handle_inbound_rpc(msg).await;
             }
             Err(e) => {
                 tracing::error!("Error reading from peer {}: {}", self.peer_name, e);
@@ -208,7 +210,7 @@ impl ConnectionActor {
         }
     }
 
-    async fn handle_inbound_message(&mut self, msg: Message) {
+    async fn handle_inbound_rpc(&mut self, msg: Message) {
         let Message { rpc, .. } = msg;
         match rpc {
             RpcMessage::Request(req) => {

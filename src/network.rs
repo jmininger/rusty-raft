@@ -42,6 +42,7 @@ use crate::{
     },
 };
 
+/// The [`NetworkManager`]'s view of a ConnectionActor
 struct Connection {
     pub peer_id: PeerId,
     pub handle: ConnectionHandle,
