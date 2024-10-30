@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use tokio::sync::oneshot;
-
 use crate::{
     peer::PeerName,
     raft_core::LogIndex,
@@ -12,7 +10,8 @@ pub enum RaftRole {
     /// The server is a follower in the Raft consensus algorithm and contains the current leaders
     /// id
     Follower(PeerName),
-    Candidate(CandidateState),
+    Candidate,
+    // Candidate(CandidateState),
     Leader(LeaderState),
 }
 
@@ -22,10 +21,10 @@ pub struct LeaderState {
     match_index: HashMap<PeerName, LogIndex>, // For each known server:
 }
 
-#[derive(Debug, Default)]
-pub struct CandidateState {
-    votes: HashMap<PeerName, bool>,
-    // We call this timer every time we receive either a response with a termId higher than ours or
-    // if we receive an appendEntries with a termId higher than ours
-    // cancel_trigger: oneshot::Sender<()>,
-}
+// #[derive(Debug, Default)]
+// pub struct CandidateState {
+//     votes: HashMap<PeerName, bool>,
+//     // We call this timer every time we receive either a response with a termId higher than ours
+// or     // if we receive an appendEntries with a termId higher than ours
+//     // cancel_trigger: oneshot::Sender<()>,
+// }

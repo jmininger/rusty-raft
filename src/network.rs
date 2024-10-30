@@ -91,7 +91,7 @@ impl NetworkManager {
         self.request_id.inc() as u64
     }
 
-    pub async fn broadcast(
+    pub fn broadcast(
         &mut self,
         msg: RpcRequest,
         timeout_ms: Duration,
@@ -99,7 +99,7 @@ impl NetworkManager {
         let mut responses = JoinSet::new();
         for (peer, conn) in self.connection_handles.iter() {
             let (response_trigger, res_alert) = oneshot::channel();
-            if let Err(send_err) = conn.handle.send((msg.clone(), response_trigger)).await {
+            if let Err(send_err) = conn.handle.try_send((msg.clone(), response_trigger)) {
                 tracing::error!("Error sending request to connection manager: {}", send_err);
             }
             let peer = peer.clone();
