@@ -107,7 +107,16 @@ pub struct ConnectionActor {
 }
 
 impl ConnectionActor {
-    /// Creates Read/Write frames for the raw socket and initializes the ConnectionActor
+    /// Creates a new `ConnectionActor` with initialized read/write frames for communication with a
+    /// peer.
+    ///
+    /// # Parameters
+    ///
+    /// - `host_id`: This node's identity, represented by a `PeerId`.
+    /// - `peer_name`: The `PeerName` of the connected peer.
+    /// - `raw_sock`: A `TcpStream` socket for communicating with the peer.
+    /// - `outbound_req_alert`: A channel to receive outgoing requests from the application.
+    /// - `inbound_req_handle`: A channel to send inbound requests to the application.
     pub fn new(
         host_id: PeerId,
         peer_name: PeerName,
@@ -195,6 +204,12 @@ impl ConnectionActor {
         }
     }
 
+    /// Handles an inbound message received from the peer, managing any errors that occur during the
+    /// read process.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg` - A result containing the message from the peer or an error if reading failed.
     async fn handle_inbound_read(&mut self, msg: Result<Message, impl Error>) {
         match msg {
             Ok(msg) => {

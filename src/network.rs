@@ -7,6 +7,10 @@ use std::{
     time::Duration,
 };
 
+use atomic_counter::{
+    AtomicCounter,
+    RelaxedCounter,
+};
 use color_eyre::Result;
 use futures::SinkExt;
 use tokio::{
@@ -56,6 +60,11 @@ pub struct NetworkManager {
     /// Write handles for connections to send request upstream to the app so that the app can
     /// manage them
     request_trigger: RequestTrigger,
+
+    /// Counter for generating unique request IDs
+    /// Note: since all requests are broadcasted, we can use the same id across requests to
+    /// different connections
+    request_id: RelaxedCounter,
 }
 
 impl NetworkManager {
@@ -64,6 +73,7 @@ impl NetworkManager {
             host_id,
             request_trigger,
             connection_handles: HashMap::new(),
+            request_id: RelaxedCounter::new(0),
         }
     }
 
@@ -72,6 +82,13 @@ impl NetworkManager {
             .values()
             .map(|c| c.peer_id.clone())
             .collect()
+    }
+
+    // TODO: I don't love that this is a part of the network manager. The only reason it currently
+    // is, is because I don't want to pass in raft-specific requests to the network manager and
+    // then wrap it in an RPC req inside of the method
+    pub fn next_request_id(&self) -> u64 {
+        self.request_id.inc() as u64
     }
 
     pub async fn broadcast(
@@ -104,9 +121,9 @@ impl NetworkManager {
         responses
     }
 
-    pub fn remove_connection(&mut self, peer: PeerName) {
-        self.connection_handles.remove(&peer);
-    }
+    // pub fn remove_connection(&mut self, peer: PeerName) {
+    //     self.connection_handles.remove(&peer);
+    // }
 
     /// Takes a new socket connection and spins up a new ConnectionActor to manage it
     pub fn add_new_peer(&mut self, peer_id: &PeerId, raw_sock: TcpStream) {
